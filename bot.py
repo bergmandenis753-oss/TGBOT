@@ -629,6 +629,61 @@ def deliver_final_report(chat_id, user_id):
         )
 
 
+def handle_stats(msg):
+    """Показывает пользователю его сохранённый профиль."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    username = msg["from"].get("username", "")
+    first_name = msg["from"].get("first_name", "")
+
+    user = get_user(user_id, username=username, first_name=first_name)
+
+    if not user.get("quiz_done"):
+        send_message(chat_id,
+            "◦ Ваш профиль ещё не заполнен.\n"
+            "Напишите /start, чтобы пройти небольшой опрос."
+        )
+        return
+
+    lines = ["✦ Ваш профиль", ""]
+
+    def add(label, value):
+        if value:
+            lines.append(f"— {label}: {value}")
+
+    handle = user.get("username")
+    add("Логин", f"@{handle}" if handle else None)
+    add("Имя", user.get("first_name"))
+    add("Возраст", user.get("age"))
+    add("Пол", user.get("gender"))
+    location = ", ".join(filter(None, [user.get("city"), user.get("country")]))
+    add("Местоположение", location)
+
+    lines.append("")
+    lines.append("✦ Цели и привычки")
+    lines.append("")
+    add("Цель", user.get("goal"))
+    add("Что беспокоит", user.get("problem"))
+    add("Частота мытья", user.get("wash_frequency"))
+    add("Время на укладку", user.get("styling_time"))
+
+    if user.get("hair_analysis"):
+        lines.append("")
+        lines.append("✦ Характеристика волос")
+        lines.append("")
+        lines.append(user["hair_analysis"])
+
+    products = get_user_products_used(user_id)
+    if products:
+        lines.append("")
+        lines.append("✦ Средства, которыми вы пользуетесь")
+        lines.append("")
+        for p in products:
+            lines.append(f"· {p}")
+
+    send_message(chat_id, "\n".join(lines))
+
+
 def handle_photo(msg):
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
@@ -785,8 +840,13 @@ def main():
                 if not user_id:
                     continue
 
-                if msg.get("text") == "/start":
+                text = msg.get("text", "")
+                command = text.split()[0].split("@")[0] if text.startswith("/") else ""
+
+                if command == "/start":
                     handle_start(msg)
+                elif command in ("/stats", "/stas", "/profile"):
+                    handle_stats(msg)
                 elif msg.get("photo"):
                     handle_photo(msg)
                 elif msg.get("text"):
