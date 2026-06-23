@@ -19,6 +19,7 @@ API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SUB_PRICE_STARS = 100          # стоимость в Telegram Stars в месяц
 SUB_DAYS = 30                  # длительность подписки
 SUB_MONTHLY_ACTIONS = 100      # лимит AI-действий в месяц по подписке
+SCANNER_FREE = 3               # бесплатных сканов косметики в режиме «Сканер»
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -137,6 +138,8 @@ def init_db():
                     free_plan_used BOOLEAN DEFAULT FALSE,
                     free_hair_used BOOLEAN DEFAULT FALSE,
                     free_product_used BOOLEAN DEFAULT FALSE,
+                    mode TEXT,
+                    scanner_used INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
                 CREATE TABLE IF NOT EXISTS products (
@@ -154,6 +157,13 @@ def init_db():
                     uses_product BOOLEAN,
                     created_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(user_id, product_id)
+                );
+                CREATE TABLE IF NOT EXISTS user_cosmetics (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    product_name TEXT,
+                    analysis TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
                 );
             """)
             # Миграция — добавляем колонки если нет
@@ -180,6 +190,8 @@ def init_db():
                 ("free_plan_used", "BOOLEAN DEFAULT FALSE"),
                 ("free_hair_used", "BOOLEAN DEFAULT FALSE"),
                 ("free_product_used", "BOOLEAN DEFAULT FALSE"),
+                ("mode", "TEXT"),
+                ("scanner_used", "INTEGER DEFAULT 0"),
             ]:
                 try:
                     cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype};")
@@ -280,6 +292,36 @@ def get_user_products_used(user_id):
                 return [r["product_name"] for r in cur.fetchall() if r.get("product_name")]
     except Exception as e:
         print(f"DB products used error: {e}")
+        return []
+
+
+def save_user_cosmetic(user_id, product_name, analysis):
+    """Сохраняет скан косметики в личную базу пользователя."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO user_cosmetics (user_id, product_name, analysis) VALUES (%s, %s, %s)",
+                    (user_id, product_name, analysis)
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"DB save cosmetic error: {e}")
+
+
+def get_user_cosmetics(user_id):
+    """Список косметики пользователя (по порядку добавления)."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, product_name, analysis FROM user_cosmetics "
+                    "WHERE user_id = %s ORDER BY created_at, id",
+                    (user_id,)
+                )
+                return cur.fetchall()
+    except Exception as e:
+        print(f"DB get cosmetics error: {e}")
         return []
 
 
@@ -635,48 +677,73 @@ def handle_start(msg):
     send_message(chat_id,
         f"Добро пожаловать, {name} ✦\n\n"
         "Я — ваш личный эксперт по красоте и уходу за волосами.\n\n"
-        "Моя миссия — исполнять ваши мечты о красивых, здоровых волосах. "
-        "Я разбираю составы косметики, помогаю решить проблемы с волосами, "
-        "подбираю уход под ваш тип и климат, и всегда говорю честно.\n\n"
-        "◦ Анализ состава любого средства\n"
-        "◦ Персональные рекомендации по уходу\n"
-        "◦ Советы по укладке и восстановлению\n"
-        "◦ Помощь с выбором средств в вашем регионе\n\n"
+        "Я разбираю составы косметики и помогаю улучшить состояние волос — "
+        "честно и по делу.\n\n"
         "Команды:\n"
-        "· /start — пройти опрос заново\n"
-        "· /stats — посмотреть ваш профиль и перейти к разбору\n\n"
-        "Прежде чем начать — позвольте узнать вас чуть лучше.\n"
-        "Небольшой опрос займёт всего пару минут ◦"
+        "· /start — вернуться к выбору режима\n"
+        "· /stats — ваш профиль\n"
+        "· /cosmetics — ваша база отсканированной косметики"
     )
 
-    # ПРИНУДИТЕЛЬНО сбрасываем квиз БЕЗ update_user
+    # Создаём пользователя при необходимости и сбрасываем состояние
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
-                # Сначала проверим есть ли пользователь
                 cur.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
                 exists = cur.fetchone()
-
                 if exists:
-                    # Обновляем если есть
                     cur.execute(
-                        "UPDATE users SET quiz_step = 0, quiz_done = FALSE, username = %s, first_name = %s WHERE user_id = %s",
+                        "UPDATE users SET username = %s, first_name = %s, awaiting = 'none' WHERE user_id = %s",
                         (username, first_name, user_id)
                     )
                 else:
-                    # Создаём если нет
                     cur.execute(
                         "INSERT INTO users (user_id, username, first_name, quiz_step, quiz_done) VALUES (%s, %s, %s, 0, FALSE)",
                         (user_id, username, first_name)
                     )
                 conn.commit()
     except Exception as e:
-        print(f"Error resetting quiz: {e}")
+        print(f"Error in start: {e}")
 
     time.sleep(1)
+    send_mode_picker(chat_id)
 
-    # Отправляем первый вопрос квиза
-    send_quiz_question(chat_id, 0)
+
+def send_mode_picker(chat_id):
+    """Главная развилка: как человек хочет использовать бота."""
+    send_message(chat_id,
+        "Как вы хотите использовать бота?\n\n"
+        "🔍 Сканер косметики — присылаете фото средства и узнаёте о нём всё: "
+        "состав, для каких волос подходит, плюсы и минусы.\n\n"
+        "✦ Улучшить состояние волос — небольшой опрос, разбор ваших волос "
+        "и персональный план ухода, питания и подбора средств.",
+        reply_markup={"inline_keyboard": [
+            [{"text": "🔍 Сканер косметики", "callback_data": "mode_scanner"}],
+            [{"text": "✦ Улучшить состояние волос", "callback_data": "mode_hair"}],
+        ]}
+    )
+
+
+def start_scanner_mode(chat_id, user_id):
+    update_user(user_id, mode="scanner", awaiting="none")
+    send_message(chat_id,
+        "🔍 Режим «Сканер косметики»\n\n"
+        "Пришлите фото любого косметического средства — я разберу его состав, "
+        "оценю и подскажу, для каких волос оно подходит.\n\n"
+        "Вся отсканированная косметика сохраняется — открыть список можно командой /cosmetics."
+    )
+
+
+def start_hair_mode(chat_id, user_id, restart_quiz=True):
+    update_user(user_id, mode="hair")
+    if restart_quiz:
+        update_user(user_id, quiz_step=0, quiz_done=False, awaiting="none")
+        send_message(chat_id,
+            "✦ Отлично! Давайте пройдём небольшой опрос — это займёт пару минут "
+            "и поможет мне дать точные рекомендации."
+        )
+        time.sleep(1)
+        send_quiz_question(chat_id, 0)
 
 
 def handle_quiz_text_answer(msg, user):
@@ -887,15 +954,59 @@ def handle_stats(msg):
 
 
 def send_action_menu(chat_id):
-    """Меню из трёх действий после «Продолжить»."""
+    """Меню действий после «Продолжить»."""
     send_message(chat_id,
         "Что хотите сделать дальше?",
         reply_markup={"inline_keyboard": [
             [{"text": "✦ Приступить к разбору волос", "callback_data": "act_report"}],
             [{"text": "📷 Прислать фото (волосы или средство)", "callback_data": "act_photo"}],
+            [{"text": "🔍 Моя косметика", "callback_data": "cosmetics_list"}],
             [{"text": "👤 Мой профиль", "callback_data": "act_profile"}],
+            [{"text": "🔄 Сменить режим", "callback_data": "home"}],
         ]}
     )
+
+
+def send_cosmetics_list(chat_id, user_id):
+    """Нумерованный список косметики пользователя с кнопками выбора."""
+    items = get_user_cosmetics(user_id)
+    if not items:
+        send_message(chat_id,
+            "◦ Ваша база косметики пуста.\n"
+            "Отсканируйте средство — и оно появится здесь.",
+            reply_markup={"inline_keyboard": [[
+                {"text": "🏠 В меню", "callback_data": "home"}
+            ]]}
+        )
+        return
+
+    lines = ["🔍 Ваша косметика", ""]
+    buttons = []
+    row = []
+    for i, c in enumerate(items, start=1):
+        name = c.get("product_name") or "Косметика"
+        lines.append(f"{i}. {name}")
+        row.append({"text": str(i), "callback_data": f"cos_{c['id']}"})
+        if len(row) == 5:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([{"text": "🏠 В меню", "callback_data": "home"}])
+
+    lines.append("")
+    lines.append("Выберите номер, чтобы посмотреть детали.")
+    send_message(chat_id, "\n".join(lines), reply_markup={"inline_keyboard": buttons})
+
+
+def handle_cosmetics(msg):
+    """Команда /cosmetics."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg.get("from", {}).get("id")
+    get_user(user_id,
+             username=msg.get("from", {}).get("username", ""),
+             first_name=msg.get("from", {}).get("first_name", ""))
+    send_cosmetics_list(chat_id, user_id)
 
 
 def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
@@ -965,6 +1076,70 @@ def process_product_photo(chat_id, user, image_bytes):
         )
 
 
+def offer_premium_scanner(chat_id):
+    """Предложение премиума в режиме сканера (без указания числа лимита)."""
+    send_message(chat_id,
+        "✦ Бесплатный лимит исчерпан\n\n"
+        "Вы использовали все бесплатные сканирования. С Премиумом лимит "
+        "становится гораздо больше — сканируйте косметику и сохраняйте её в свою базу "
+        "практически без ограничений.\n\n"
+        f"Стоимость: {SUB_PRICE_STARS} ⭐ Telegram Stars в месяц.",
+        reply_markup={"inline_keyboard": [[
+            {"text": "Открыть Премиум", "callback_data": "buy_sub"}
+        ]]}
+    )
+
+
+def process_scanner_photo(chat_id, user, image_bytes):
+    """Режим «Сканер»: анализ косметики + сохранение в личную базу пользователя."""
+    user_id = user["user_id"]
+
+    # Доступ: бесплатно SCANNER_FREE сканов, далее — подписка
+    if subscription_active(user):
+        way = "sub"
+    elif (user.get("scanner_used") or 0) < SCANNER_FREE:
+        way = "free_scanner"
+    else:
+        offer_premium_scanner(chat_id)
+        return
+
+    send_message(chat_id,
+        "🔍 Сканирую косметику...\n\n"
+        "◦ Изучаю состав\n"
+        "◦ Готовлю отчёт"
+    )
+    try:
+        image_hash = hashlib.md5(image_bytes).hexdigest()
+        cached = get_cached_analysis(image_hash)
+        if cached:
+            analysis = cached["analysis"]
+            product_name = cached.get("product_name") or "Косметика"
+        else:
+            analysis = analyze_image(image_bytes, user=user)
+            product_name = extract_product_name(analysis)
+            save_analysis(image_hash, product_name, analysis)
+
+        # Сохраняем в личную базу косметики
+        save_user_cosmetic(user_id, product_name, analysis)
+
+        # Списываем использование
+        if way == "sub":
+            consume_ai_action(user_id, "sub", "product")
+        else:
+            update_user(user_id, scanner_used=(user.get("scanner_used") or 0) + 1)
+
+        send_message(chat_id, analysis)
+        send_message(chat_id,
+            "◦ Сохранено в вашу базу. Открыть список: /cosmetics\n"
+            "Пришлите ещё фото или вернитесь в меню."
+        )
+    except Exception as e:
+        print(f"Error scanner: {e}")
+        send_message(chat_id,
+            "◦ Произошла ошибка при анализе. Попробуйте ещё раз или другое фото."
+        )
+
+
 def handle_photo(msg):
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
@@ -973,14 +1148,9 @@ def handle_photo(msg):
 
     user = get_user(user_id, username=username, first_name=first_name)
 
-    # Если квиз не пройден
-    if not user.get("quiz_done"):
-        step_index = user.get("quiz_step", 0)
-        send_message(chat_id,
-            "◦ Прежде чем начать анализ, завершите небольшой опрос.\n"
-            "Это займёт пару минут и поможет мне дать персональные рекомендации."
-        )
-        send_quiz_question(chat_id, step_index)
+    # Режим ещё не выбран — показываем развилку
+    if not user.get("mode"):
+        send_mode_picker(chat_id)
         return
 
     # Скачиваем фото один раз
@@ -991,6 +1161,21 @@ def handle_photo(msg):
     except Exception as e:
         print(f"Error downloading photo: {e}")
         send_message(chat_id, "◦ Не удалось загрузить фото. Попробуйте ещё раз.")
+        return
+
+    # Режим «Сканер косметики» — любое фото трактуем как косметику
+    if user.get("mode") == "scanner":
+        process_scanner_photo(chat_id, user, image_bytes)
+        return
+
+    # Режим «Волосы»: если квиз не пройден — просим завершить
+    if not user.get("quiz_done"):
+        step_index = user.get("quiz_step", 0)
+        send_message(chat_id,
+            "◦ Прежде чем начать анализ, завершите небольшой опрос.\n"
+            "Это займёт пару минут и поможет дать персональные рекомендации."
+        )
+        send_quiz_question(chat_id, step_index)
         return
 
     # Если бот ждёт фото волос после квиза — это точно волосы
@@ -1020,6 +1205,38 @@ def handle_callback(callback):
         return
 
     tg("answerCallbackQuery", {"callback_query_id": query_id})
+
+    # Выбор режима
+    if data == "mode_scanner":
+        start_scanner_mode(chat_id, user_id)
+        return
+    if data == "mode_hair":
+        start_hair_mode(chat_id, user_id, restart_quiz=True)
+        return
+    if data == "home":
+        send_mode_picker(chat_id)
+        return
+
+    # Открыть конкретную косметику из списка: cos_<id>
+    if data.startswith("cos_"):
+        try:
+            cos_id = int(data.split("_")[1])
+        except (ValueError, IndexError):
+            return
+        items = get_user_cosmetics(user_id)
+        match = next((c for c in items if c["id"] == cos_id), None)
+        if match:
+            send_message(chat_id,
+                f"✦ {match.get('product_name') or 'Косметика'}\n\n" + (match.get("analysis") or ""),
+                reply_markup={"inline_keyboard": [[
+                    {"text": "‹ К списку", "callback_data": "cosmetics_list"},
+                    {"text": "🏠 В меню", "callback_data": "home"},
+                ]]}
+            )
+        return
+    if data == "cosmetics_list":
+        send_cosmetics_list(chat_id, user_id)
+        return
 
     # Пропуск фото волос → сразу к итоговому разбору
     if data == "skip_hair":
@@ -1129,15 +1346,23 @@ def main():
                     handle_start(msg)
                 elif command in ("/stats", "/stas", "/profile"):
                     handle_stats(msg)
+                elif command in ("/cosmetics", "/cosmetic"):
+                    handle_cosmetics(msg)
                 elif msg.get("photo"):
                     handle_photo(msg)
                 elif msg.get("text"):
-                    # Текстовый ответ на квиз
                     user = get_user(user_id)
-                    if not user.get("quiz_done"):
+                    # Режим не выбран — показываем развилку
+                    if not user.get("mode"):
+                        send_mode_picker(chat_id)
+                    # Режим «Сканер» — ждём фото косметики
+                    elif user.get("mode") == "scanner":
+                        send_message(chat_id, "🔍 Пришлите фото косметического средства — я его разберу.")
+                    # Режим «Волосы»: квиз
+                    elif not user.get("quiz_done"):
                         handled = handle_quiz_text_answer(msg, user)
                         if not handled:
-                            send_message(chat_id, "◦ Отправьте фото косметического средства — и я сделаю анализ.")
+                            send_message(chat_id, "◦ Ответьте на вопрос опроса текстом.")
                     elif user.get("awaiting") == "hair_photo":
                         send_message(chat_id,
                             "◦ Пришлите фото волос или селфи — или нажмите «Пропустить».",
@@ -1146,7 +1371,7 @@ def main():
                             ]]}
                         )
                     else:
-                        send_message(chat_id, "◦ Отправьте фото косметического средства — и я сделаю анализ.")
+                        send_message(chat_id, "◦ Отправьте фото средства — или откройте меню: /stats")
 
         except Exception as e:
             print(f"Error: {e}")
