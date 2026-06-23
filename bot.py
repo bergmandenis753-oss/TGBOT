@@ -2,6 +2,7 @@ import os
 import base64
 import time
 import hashlib
+from datetime import datetime, timedelta
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -13,6 +14,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# ─── Подписка (Telegram Stars) ─────────────────────────────
+SUB_PRICE_STARS = 100          # стоимость в Telegram Stars в месяц
+SUB_DAYS = 30                  # длительность подписки
+SUB_MONTHLY_ACTIONS = 100      # лимит AI-действий в месяц по подписке
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -124,6 +130,13 @@ def init_db():
                     hair_analysis TEXT,
                     final_report TEXT,
                     awaiting TEXT DEFAULT 'none',
+                    is_subscribed BOOLEAN DEFAULT FALSE,
+                    sub_start TIMESTAMP,
+                    sub_expires TIMESTAMP,
+                    sub_actions_used INTEGER DEFAULT 0,
+                    free_plan_used BOOLEAN DEFAULT FALSE,
+                    free_hair_used BOOLEAN DEFAULT FALSE,
+                    free_product_used BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
                 CREATE TABLE IF NOT EXISTS products (
@@ -160,6 +173,13 @@ def init_db():
                 ("hair_analysis", "TEXT"),
                 ("final_report", "TEXT"),
                 ("awaiting", "TEXT DEFAULT 'none'"),
+                ("is_subscribed", "BOOLEAN DEFAULT FALSE"),
+                ("sub_start", "TIMESTAMP"),
+                ("sub_expires", "TIMESTAMP"),
+                ("sub_actions_used", "INTEGER DEFAULT 0"),
+                ("free_plan_used", "BOOLEAN DEFAULT FALSE"),
+                ("free_hair_used", "BOOLEAN DEFAULT FALSE"),
+                ("free_product_used", "BOOLEAN DEFAULT FALSE"),
             ]:
                 try:
                     cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype};")
@@ -263,6 +283,76 @@ def get_user_products_used(user_id):
         return []
 
 
+# ─── Подписка и лимиты ─────────────────────────────────────
+
+# Тип действия -> поле бесплатного флага в БД
+FREE_FLAG = {
+    "plan": "free_plan_used",
+    "hair": "free_hair_used",
+    "product": "free_product_used",
+}
+
+
+def subscription_active(user):
+    """Активна ли подписка (не истёк срок и есть остаток действий)."""
+    if not user.get("is_subscribed"):
+        return False
+    expires = user.get("sub_expires")
+    if not expires:
+        return False
+    try:
+        if isinstance(expires, str):
+            expires = datetime.fromisoformat(expires)
+        if expires < datetime.utcnow():
+            return False
+    except Exception:
+        return False
+    return (user.get("sub_actions_used") or 0) < SUB_MONTHLY_ACTIONS
+
+
+def sub_actions_left(user):
+    if not subscription_active(user):
+        return 0
+    return SUB_MONTHLY_ACTIONS - (user.get("sub_actions_used") or 0)
+
+
+def can_use_ai(user, action):
+    """Можно ли выполнить AI-действие.
+    Возвращает (True/False, способ: 'free' | 'sub' | None)."""
+    # Бесплатный «первый раз» для данного типа действия
+    flag = FREE_FLAG.get(action)
+    if flag and not user.get(flag):
+        return True, "free"
+    # Иначе — по активной подписке
+    if subscription_active(user):
+        return True, "sub"
+    return False, None
+
+
+def consume_ai_action(user_id, way, action):
+    """Списывает использование: либо бесплатный флаг, либо +1 к счётчику подписки."""
+    if way == "free":
+        flag = FREE_FLAG.get(action)
+        if flag:
+            update_user(user_id, **{flag: True})
+    elif way == "sub":
+        u = get_user(user_id)
+        update_user(user_id, sub_actions_used=(u.get("sub_actions_used") or 0) + 1)
+
+
+def activate_subscription(user_id):
+    """Активирует/продлевает подписку на SUB_DAYS дней, обнуляет счётчик."""
+    now = datetime.utcnow()
+    expires = now + timedelta(days=SUB_DAYS)
+    update_user(
+        user_id,
+        is_subscribed=True,
+        sub_start=now.isoformat(),
+        sub_expires=expires.isoformat(),
+        sub_actions_used=0,
+    )
+
+
 # ─── Telegram ──────────────────────────────────────────────
 
 def tg(method, data=None):
@@ -277,6 +367,35 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     if parse_mode:
         payload["parse_mode"] = parse_mode
     tg("sendMessage", payload)
+
+
+def send_subscription_invoice(chat_id):
+    """Счёт на оплату подписки через Telegram Stars (валюта XTR)."""
+    tg("sendInvoice", {
+        "chat_id": chat_id,
+        "title": "Премиум-подписка ✦",
+        "description": (
+            f"{SUB_MONTHLY_ACTIONS} разборов и анализов фото в месяц. "
+            "Персональные планы, анализ волос и косметики без ограничений в рамках лимита."
+        ),
+        "payload": "premium_monthly",
+        "currency": "XTR",
+        "prices": [{"label": "Подписка на месяц", "amount": SUB_PRICE_STARS}],
+    })
+
+
+def offer_subscription(chat_id, reason=""):
+    """Показывает мягкое предложение оформить подписку + кнопку оплаты."""
+    text = (
+        (reason + "\n\n" if reason else "")
+        + "✦ Премиум-доступ\n\n"
+        f"Бесплатный лимит исчерпан. Подписка открывает {SUB_MONTHLY_ACTIONS} "
+        "AI-действий в месяц — персональные планы и анализ фото волос и косметики.\n\n"
+        f"Стоимость: {SUB_PRICE_STARS} ⭐ Telegram Stars в месяц."
+    )
+    send_message(chat_id, text, reply_markup={"inline_keyboard": [[
+        {"text": f"Оформить за {SUB_PRICE_STARS} ⭐", "callback_data": "buy_sub"}
+    ]]})
 
 
 def send_quiz_question(chat_id, step_index):
@@ -646,6 +765,13 @@ def finish_quiz(chat_id, user_id):
 def deliver_final_report(chat_id, user_id):
     """Генерирует и отправляет итоговый персональный разбор по всей базе."""
     update_user(user_id, awaiting="none")
+
+    user = get_user(user_id)
+    allowed, way = can_use_ai(user, "plan")
+    if not allowed:
+        offer_subscription(chat_id, "Первый персональный план вы уже получили.")
+        return
+
     send_message(chat_id,
         "✦ Готовлю ваш персональный разбор...\n\n"
         "◦ Изучаю профиль\n"
@@ -653,9 +779,9 @@ def deliver_final_report(chat_id, user_id):
         "◦ Составляю план"
     )
     try:
-        user = get_user(user_id)
         report = generate_final_report(user)
         update_user(user_id, final_report=report)
+        consume_ai_action(user_id, way, "plan")
         send_message(chat_id, report)
         send_message(chat_id,
             "◦ Это ваш персональный план ✦\n\n"
@@ -717,6 +843,35 @@ def show_profile(chat_id, user_id, username="", first_name=""):
         for p in products:
             lines.append(f"· {p}")
 
+    # Статус подписки
+    lines.append("")
+    lines.append("✦ Подписка")
+    lines.append("")
+    if subscription_active(user):
+        expires = user.get("sub_expires")
+        try:
+            if isinstance(expires, str):
+                expires = datetime.fromisoformat(expires)
+            date_str = expires.strftime("%d.%m.%Y")
+        except Exception:
+            date_str = "—"
+        lines.append("— Статус: активна")
+        lines.append(f"— Действует до: {date_str}")
+        lines.append(f"— Осталось действий: {sub_actions_left(user)} из {SUB_MONTHLY_ACTIONS}")
+    else:
+        lines.append("— Статус: бесплатный доступ")
+        free_left = []
+        if not user.get("free_plan_used"):
+            free_left.append("план")
+        if not user.get("free_hair_used"):
+            free_left.append("фото волос")
+        if not user.get("free_product_used"):
+            free_left.append("фото средства")
+        if free_left:
+            lines.append("— Бесплатно ещё доступно: " + ", ".join(free_left))
+        else:
+            lines.append(f"— Бесплатный лимит исчерпан · подписка {SUB_PRICE_STARS} ⭐/мес")
+
     send_message(chat_id, "\n".join(lines),
         reply_markup={"inline_keyboard": [[
             {"text": "Продолжить ›", "callback_data": "menu_open"}
@@ -745,10 +900,17 @@ def send_action_menu(chat_id):
 
 def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
     """Анализ фото волос → запись в БД. При then_report — затем выдать разбор."""
+    user = get_user(user_id)
+    allowed, way = can_use_ai(user, "hair")
+    if not allowed:
+        offer_subscription(chat_id, "Бесплатный анализ волос вы уже использовали.")
+        return
+
     send_message(chat_id, "✦ Изучаю ваши волосы...")
     try:
         hair = analyze_hair(image_bytes)
         update_user(user_id, hair_analysis=hair)
+        consume_ai_action(user_id, way, "hair")
         send_message(chat_id, "✦ Что видно о ваших волосах:\n\n" + hair)
     except Exception as e:
         print(f"Error hair analysis: {e}")
@@ -760,6 +922,12 @@ def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
 def process_product_photo(chat_id, user, image_bytes):
     """Анализ фото косметического средства."""
     user_id = user["user_id"]
+
+    allowed, way = can_use_ai(user, "product")
+    if not allowed:
+        offer_subscription(chat_id, "Бесплатный анализ косметики вы уже использовали.")
+        return
+
     send_message(chat_id,
         "✦ Анализирую средство...\n\n"
         "◦ Изучаю состав\n"
@@ -772,12 +940,14 @@ def process_product_photo(chat_id, user, image_bytes):
         if cached:
             analysis = cached["analysis"]
             product_id = cached["id"]
+            consume_ai_action(user_id, way, "product")
             send_message(chat_id, analysis)
             note = "◦ Это средство уже было в нашей базе\n\nВы пользуетесь им?"
         else:
             analysis = analyze_image(image_bytes, user=user)
             product_name = extract_product_name(analysis)
             product_id = save_analysis(image_hash, product_name, analysis)
+            consume_ai_action(user_id, way, "product")
             send_message(chat_id, analysis)
             note = "Вы пользуетесь этим средством?"
         if product_id:
@@ -875,6 +1045,11 @@ def handle_callback(callback):
         show_profile(chat_id, user_id, frm.get("username", ""), frm.get("first_name", ""))
         return
 
+    # Оплата подписки
+    if data == "buy_sub":
+        send_subscription_invoice(chat_id)
+        return
+
     if data.startswith("uses_yes_") or data.startswith("uses_no_"):
         uses = data.startswith("uses_yes_")
         product_id = int(data.split("_")[-1])
@@ -902,7 +1077,7 @@ def main():
 
     while True:
         try:
-            params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
+            params = {"timeout": 30, "allowed_updates": ["message", "callback_query", "pre_checkout_query"]}
             if offset:
                 params["offset"] = offset
 
@@ -912,12 +1087,31 @@ def main():
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
 
+                # Подтверждение оплаты до списания Stars — нужно ответить ok
+                if "pre_checkout_query" in update:
+                    pcq = update["pre_checkout_query"]
+                    tg("answerPreCheckoutQuery", {"pre_checkout_query_id": pcq["id"], "ok": True})
+                    continue
+
                 if "callback_query" in update:
                     handle_callback(update["callback_query"])
                     continue
 
                 msg = update.get("message", {})
                 if not msg:
+                    continue
+
+                # Успешная оплата → активируем подписку
+                if msg.get("successful_payment"):
+                    uid = msg.get("from", {}).get("id")
+                    cid = msg.get("chat", {}).get("id")
+                    if uid:
+                        activate_subscription(uid)
+                        send_message(cid,
+                            "✦ Подписка активирована\n\n"
+                            f"Вам доступно {SUB_MONTHLY_ACTIONS} AI-действий на {SUB_DAYS} дней.\n"
+                            "Присылайте фото волос или косметики и запрашивайте новые планы."
+                        )
                     continue
 
                 chat_id = msg.get("chat", {}).get("id")
