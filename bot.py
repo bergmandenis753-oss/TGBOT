@@ -121,6 +121,9 @@ def init_db():
                     city TEXT,
                     wash_frequency TEXT,
                     styling_time TEXT,
+                    hair_analysis TEXT,
+                    final_report TEXT,
+                    awaiting TEXT DEFAULT 'none',
                     created_at TIMESTAMP DEFAULT NOW()
                 );
                 CREATE TABLE IF NOT EXISTS products (
@@ -154,6 +157,9 @@ def init_db():
                 ("city", "TEXT"),
                 ("wash_frequency", "TEXT"),
                 ("styling_time", "TEXT"),
+                ("hair_analysis", "TEXT"),
+                ("final_report", "TEXT"),
+                ("awaiting", "TEXT DEFAULT 'none'"),
             ]:
                 try:
                     cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype};")
@@ -238,6 +244,25 @@ def save_user_product(user_id, product_id, uses_product):
         print(f"DB user product error: {e}")
 
 
+def get_user_products_used(user_id):
+    """Список названий средств, которыми пользователь отметил, что пользуется."""
+    if not user_id:
+        return []
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT p.product_name FROM user_products up "
+                    "JOIN products p ON p.id = up.product_id "
+                    "WHERE up.user_id = %s AND up.uses_product = TRUE",
+                    (user_id,)
+                )
+                return [r["product_name"] for r in cur.fetchall() if r.get("product_name")]
+    except Exception as e:
+        print(f"DB products used error: {e}")
+        return []
+
+
 # ─── Telegram ──────────────────────────────────────────────
 
 def tg(method, data=None):
@@ -278,7 +303,8 @@ def download_file(file_path):
 
 # ─── OpenAI ────────────────────────────────────────────────
 
-def build_analysis_prompt(user):
+def build_profile_text(user, include_hair=False, include_products=False):
+    """Собирает текстовый профиль пользователя для промтов."""
     profile = ""
     if user.get("goal"):
         profile += f"Цель пользователя: {user['goal']}\n"
@@ -286,6 +312,8 @@ def build_analysis_prompt(user):
         profile += f"Проблема с волосами: {user['problem']}\n"
     if user.get("age"):
         profile += f"Возраст: {user['age']}\n"
+    if user.get("gender"):
+        profile += f"Пол: {user['gender']}\n"
     if user.get("country") or user.get("city"):
         location = ", ".join(filter(None, [user.get("city"), user.get("country")]))
         profile += f"Местоположение: {location}\n"
@@ -293,7 +321,19 @@ def build_analysis_prompt(user):
         profile += f"Частота мытья головы: {user['wash_frequency']}\n"
     if user.get("styling_time"):
         profile += f"Время на укладку: {user['styling_time']}\n"
+    if include_hair and user.get("hair_analysis"):
+        profile += f"\nХарактеристика волос (по фото):\n{user['hair_analysis']}\n"
+    if include_products:
+        products = get_user_products_used(user.get("user_id"))
+        if products:
+            profile += "\nСредства, которыми пользуется человек:\n"
+            for p in products:
+                profile += f"· {p}\n"
+    return profile
 
+
+def build_analysis_prompt(user):
+    profile = build_profile_text(user)
     profile_block = f"\nПрофиль пользователя:\n{profile}\n" if profile else ""
 
     return f"""Ты — элегантный персональный эксперт по уходу за волосами и красоте. Твой стиль — дорогой, женственный, заботливый. Никаких грубых слов, только тёплые рекомендации.{profile_block}
@@ -354,6 +394,76 @@ def extract_product_name(analysis):
             if name and len(name) < 80:
                 return name
     return "Продукт"
+
+
+def analyze_hair(image_bytes):
+    """GPT описывает структуру и особенности волос по фото/селфи."""
+    image_b64 = base64.standard_b64encode(image_bytes).decode()
+    prompt = (
+        "Ты — деликатный эксперт-трихолог. На фото волосы или селфи человека. "
+        "Кратко и тактично опиши то, что видно о волосах: примерный тип (прямые/волнистые/кудрявые), "
+        "густоту, состояние (блеск, сухость, ломкость, пушистость), длину, видимые особенности кожи головы. "
+        "Если чего-то не видно — не выдумывай. Пиши спокойно и по делу, без оценок внешности человека, "
+        "только характеристики волос. 4–6 коротких строк, оформление — символами · и —, без ✅ и ❌."
+    )
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "max_tokens": 500,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}", "detail": "low"}},
+                {"type": "text", "text": prompt}
+            ]}]
+        },
+        verify=VERIFY
+    )
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def generate_final_report(user):
+    """Итоговый персональный разбор по всей базе пользователя."""
+    profile = build_profile_text(user, include_hair=True, include_products=True)
+    prompt = f"""Ты — элегантный личный эксперт по волосам. Твой стиль — дорогой, женственный, заботливый, поддерживающий. Только тёплые формулировки, никаких грубых слов.
+
+Вот всё, что мы знаем о человеке:
+{profile}
+
+Составь персональный разбор и план, чтобы помочь достичь её цели. Опирайся на её профиль, привычки, состояние волос и средства, которыми она пользуется (если есть — отметь, что стоит оставить, а что заменить). Отвечай только про волосы и связанное с ними здоровье.
+
+Структура ответа (оформление только символами ✦ — · ◦, без ✅ и ❌):
+
+✦ КОРОТКО
+— Тёплое резюме ситуации в 2–3 строки
+
+✦ ЧТО ПРОИСХОДИТ С ВОЛОСАМИ
+— Разбор причин на основе профиля
+
+✦ ПЛАН · УХОД
+— Конкретные шаги по уходу и мытью
+
+✦ ПЛАН · СРЕДСТВА
+— Что искать в составе, что использовать; с учётом её средств
+
+✦ ПЛАН · ПИТАНИЕ И ЗДОРОВЬЕ
+— Что важно для волос: жиры, белок, коллаген, витамины и т.д.
+
+✦ ПЕРВЫЙ ШАГ
+— Один простой шаг, с которого начать уже сегодня
+
+Будь конкретной и честной, но мягкой."""
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "max_tokens": 1500,
+            "messages": [{"role": "user", "content": prompt}]
+        },
+        verify=VERIFY
+    )
+    return resp.json()["choices"][0]["message"]["content"]
 
 
 # ─── Обработчики ───────────────────────────────────────────
@@ -444,6 +554,11 @@ def handle_quiz_callback(callback, user):
 
     tg("answerCallbackQuery", {"callback_query_id": query_id})
 
+    # Защита от повторного нажатия: если квиз уже завершён — игнорируем.
+    fresh = get_user(user_id)
+    if fresh.get("quiz_done"):
+        return False
+
     # data = "quiz_KEY_INDEX" — KEY может содержать подчёркивания (wash_frequency, styling_time),
     # поэтому парсим с конца: последний сегмент — индекс, всё между "quiz_" и ним — ключ.
     if not data.startswith("quiz_"):
@@ -475,14 +590,43 @@ def handle_quiz_callback(callback, user):
 
 
 def finish_quiz(chat_id, user_id):
-    update_user(user_id, quiz_done=True, quiz_step=len(QUIZ_STEPS))
+    update_user(user_id, quiz_done=True, quiz_step=len(QUIZ_STEPS), awaiting="hair_photo")
     send_message(chat_id,
         "✦ Профиль создан\n\n"
         "Благодарю за ответы — теперь я знаю вас лучше.\n\n"
-        "Отправьте фото любого косметического средства — шампуня, маски, "
-        "масла, бальзама или стайлера — и я сделаю персональный разбор "
-        "специально для вас ◦"
+        "Чтобы разбор был точнее, пришлите фото своих волос или селфи — "
+        "я оценю их структуру и особенности. Это по желанию.\n\n"
+        "◦ Отправьте фото — или нажмите «Пропустить»",
+        reply_markup={"inline_keyboard": [[
+            {"text": "Пропустить", "callback_data": "skip_hair"}
+        ]]}
     )
+
+
+def deliver_final_report(chat_id, user_id):
+    """Генерирует и отправляет итоговый персональный разбор по всей базе."""
+    update_user(user_id, awaiting="none")
+    send_message(chat_id,
+        "✦ Готовлю ваш персональный разбор...\n\n"
+        "◦ Изучаю профиль\n"
+        "◦ Сверяю привычки и средства\n"
+        "◦ Составляю план"
+    )
+    try:
+        user = get_user(user_id)
+        report = generate_final_report(user)
+        update_user(user_id, final_report=report)
+        send_message(chat_id, report)
+        send_message(chat_id,
+            "◦ Это ваш персональный план ✦\n\n"
+            "В любой момент пришлите фото косметического средства — "
+            "и я разберу его состав специально для вас."
+        )
+    except Exception as e:
+        print(f"Error final report: {e}")
+        send_message(chat_id,
+            "◦ Не удалось составить разбор сейчас. Попробуйте ещё раз чуть позже."
+        )
 
 
 def handle_photo(msg):
@@ -501,6 +645,22 @@ def handle_photo(msg):
             "Это займёт пару минут и поможет мне дать персональные рекомендации."
         )
         send_quiz_question(chat_id, step_index)
+        return
+
+    # Ожидаем фото волос/селфи после квиза
+    if user.get("awaiting") == "hair_photo":
+        send_message(chat_id, "✦ Изучаю ваши волосы...")
+        try:
+            photo = msg["photo"][-1]
+            file_info = tg("getFile", {"file_id": photo["file_id"]})
+            image_bytes = download_file(file_info["result"]["file_path"])
+            hair = analyze_hair(image_bytes)
+            update_user(user_id, hair_analysis=hair)
+            send_message(chat_id, "✦ Вот что я увидела о ваших волосах:\n\n" + hair)
+        except Exception as e:
+            print(f"Error hair analysis: {e}")
+            send_message(chat_id, "◦ Не удалось разобрать фото волос, но это не помешает — перейдём к разбору.")
+        deliver_final_report(chat_id, user_id)
         return
 
     send_message(chat_id,
@@ -566,6 +726,12 @@ def handle_callback(callback):
 
     tg("answerCallbackQuery", {"callback_query_id": query_id})
 
+    # Пропуск фото волос → сразу к итоговому разбору
+    if data == "skip_hair":
+        if user.get("awaiting") == "hair_photo":
+            deliver_final_report(chat_id, user_id)
+        return
+
     if data.startswith("uses_yes_") or data.startswith("uses_no_"):
         uses = data.startswith("uses_yes_")
         product_id = int(data.split("_")[-1])
@@ -630,6 +796,13 @@ def main():
                         handled = handle_quiz_text_answer(msg, user)
                         if not handled:
                             send_message(chat_id, "◦ Отправьте фото косметического средства — и я сделаю анализ.")
+                    elif user.get("awaiting") == "hair_photo":
+                        send_message(chat_id,
+                            "◦ Пришлите фото волос или селфи — или нажмите «Пропустить».",
+                            reply_markup={"inline_keyboard": [[
+                                {"text": "Пропустить", "callback_data": "skip_hair"}
+                            ]]}
+                        )
                     else:
                         send_message(chat_id, "◦ Отправьте фото косметического средства — и я сделаю анализ.")
 
