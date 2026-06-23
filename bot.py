@@ -444,13 +444,15 @@ def handle_quiz_callback(callback, user):
 
     tg("answerCallbackQuery", {"callback_query_id": query_id})
 
-    # data = "quiz_KEY_INDEX"
-    parts = data.split("_", 2)
-    if len(parts) < 3 or parts[0] != "quiz":
+    # data = "quiz_KEY_INDEX" — KEY может содержать подчёркивания (wash_frequency, styling_time),
+    # поэтому парсим с конца: последний сегмент — индекс, всё между "quiz_" и ним — ключ.
+    if not data.startswith("quiz_"):
         return False
-
-    key = parts[1]
-    option_index = int(parts[2])
+    body = data[len("quiz_"):]
+    key, sep, index_str = body.rpartition("_")
+    if not sep or not index_str.isdigit():
+        return False
+    option_index = int(index_str)
 
     # Находим шаг по key
     step = next((s for s in QUIZ_STEPS if s["key"] == key), None)
