@@ -2,7 +2,6 @@ import os
 import base64
 import time
 import hashlib
-import datetime
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -19,11 +18,31 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 VERIFY = False
 
-FREE_SCANS = 1
-STARS_PRICE = 100
-SUB_DAYS = 30
+ANALYSIS_PROMPT = """Ты эксперт-косметолог и химик. Пользователь прислал фото косметического продукта.
 
-ANALYSIS_PROMPT = "Ty ekspert-kosmetolog. Otvet po strukture: PRODUKT: [nazvanie] REJTING: [X/10] SOSTAV: - komponenty PLYUSY: ... MINUSY: ... PODHODIT: ... SOVET: ..."
+Ответь по структуре:
+
+🧴 ПРОДУКТ: [название и бренд если видно]
+
+⭐ РЕЙТИНГ: [X/10] — одна фраза-вердикт
+
+📋 СОСТАВ (ключевые компоненты):
+- [компонент]: [для чего он, польза или вред]
+(перечисли 5-8 самых важных)
+
+✅ ПЛЮСЫ:
+- ...
+
+❌ МИНУСЫ / ПРЕДУПРЕЖДЕНИЯ:
+- ...
+
+👤 ПОДХОДИТ ДЛЯ:
+- Тип волос/кожи: [сухие, жирные, нормальные, окрашенные...]
+- НЕ подходит: [кому лучше избегать]
+
+💡 СОВЕТ: [практическая рекомендация]
+
+Будь честным — если продукт плохой, скажи об этом."""
 
 
 def get_db():
@@ -35,67 +54,24 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS products (
-                    id SERIAL PRIMARY KEY, image_hash TEXT UNIQUE,
-                    product_name TEXT, analysis TEXT,
-                    scan_count INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT NOW()
+                    id SERIAL PRIMARY KEY,
+                    image_hash TEXT UNIQUE,
+                    product_name TEXT,
+                    analysis TEXT,
+                    scan_count INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT NOW()
                 );
                 CREATE TABLE IF NOT EXISTS user_products (
-                    id SERIAL PRIMARY KEY, user_id BIGINT,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     product_id INTEGER REFERENCES products(id),
-                    uses_product BOOLEAN, created_at TIMESTAMP DEFAULT NOW(),
+                    uses_product BOOLEAN,
+                    created_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(user_id, product_id)
                 );
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY, free_scans_used INTEGER DEFAULT 0,
-                    subscription_until TIMESTAMP, created_at TIMESTAMP DEFAULT NOW()
-                );
-            """)
-            # Migrate old DB - add columns if missing
-            cur.execute("""
-                ALTER TABLE users ADD COLUMN IF NOT EXISTS free_scans_used INTEGER DEFAULT 0;
-                ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMP;
             """)
         conn.commit()
     print("DB initialized")
-
-
-def get_user(user_id):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                cur.execute("INSERT INTO users (user_id) VALUES (%s) RETURNING *", (user_id,))
-                row = cur.fetchone()
-                conn.commit()
-            return row
-
-
-def has_active_sub(user):
-    return user["subscription_until"] and user["subscription_until"] > datetime.datetime.now()
-
-
-def user_can_scan(user_id):
-    user = get_user(user_id)
-    if has_active_sub(user):
-        return True
-    return user["free_scans_used"] < FREE_SCANS
-
-
-def increment_free_scans(user_id):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET free_scans_used = free_scans_used + 1 WHERE user_id = %s", (user_id,))
-            conn.commit()
-
-
-def activate_subscription(user_id):
-    until = datetime.datetime.now() + datetime.timedelta(days=SUB_DAYS)
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET subscription_until = %s WHERE user_id = %s", (until, user_id))
-            conn.commit()
-    return until
 
 
 def get_cached_analysis(image_hash):
@@ -118,7 +94,8 @@ def save_analysis(image_hash, product_name, analysis):
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO products (image_hash, product_name, analysis) VALUES (%s, %s, %s) ON CONFLICT (image_hash) DO NOTHING RETURNING id",
+                    "INSERT INTO products (image_hash, product_name, analysis) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (image_hash) DO NOTHING RETURNING id",
                     (image_hash, product_name, analysis)
                 )
                 row = cur.fetchone()
@@ -137,7 +114,8 @@ def save_user_product(user_id, product_id, uses_product):
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO user_products (user_id, product_id, uses_product) VALUES (%s, %s, %s) ON CONFLICT (user_id, product_id) DO UPDATE SET uses_product = %s",
+                    "INSERT INTO user_products (user_id, product_id, uses_product) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (user_id, product_id) DO UPDATE SET uses_product = %s",
                     (user_id, product_id, uses_product, uses_product)
                 )
                 conn.commit()
@@ -155,17 +133,6 @@ def send_message(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = reply_markup
     tg("sendMessage", payload)
-
-
-def send_invoice(chat_id, user_id):
-    tg("sendInvoice", {
-        "chat_id": chat_id,
-        "title": "Podpiska na 30 dnej",
-        "description": "Bezlimitnyj analiz kosmetiki na 30 dnej. Chestnyj otzyv, sostav, rejting.",
-        "payload": f"sub_{user_id}",
-        "currency": "XTR",
-        "prices": [{"label": "Podpiska 30 dnej", "amount": STARS_PRICE}],
-    })
 
 
 def download_file(file_path):
@@ -194,90 +161,82 @@ def analyze_image(image_bytes):
 
 def extract_product_name(analysis):
     for line in analysis.split("\n"):
-        if "PRODUKT" in line.upper() or "PRODUCT" in line.upper():
+        if "ПРОДУКТ" in line or "PRODUCT" in line.upper():
             return line.split(":", 1)[-1].strip()
-    return "Unknown"
+    return "Неизвестный продукт"
 
 
 def handle_start(msg):
     chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
     name = msg.get("from", {}).get("first_name", "")
-    get_user(user_id)
-    greeting = f"Privet, {name}! ð" if name else "Privet! ð"
+    greeting = f"Привет, {name}! 👋" if name else "Привет! 👋"
     send_message(chat_id,
-        greeting + "\n\nYa - bot-kosmetolog ð§´\n"
-        "Razbiraju sostav kosmetiki i govorju chestno.\n\n"
-        "ð¸ Prosti foto produkta - rasskazhu:\n"
-        "- Brend i nazvanie\n- Ocenka 1-10 â­\n"
-        "- Sostav i komponenty\n- Dlya kakogo tipa volos/kozhi\n"
-        "- Plyusy i minusy\n- Chestnyj sovet\n\n"
-        f"ð U tebya est {FREE_SCANS} besplatnyj analiz.\n"
-        f"Dalee - podpiska {STARS_PRICE} â­ v mesyac.\n\n"
-        "Otpravlyaj foto - nachnem! ð"
+        greeting + "\n\nЯ — бот-косметолог 🧴\n"
+        "Разбираю состав косметики и говорю честно.\n\n"
+        "📸 Пришли фото продукта — расскажу:\n"
+        "• Что за бренд и продукт\n"
+        "• Оценка от 1 до 10 ⭐\n"
+        "• Ключевые компоненты состава\n"
+        "• Для какого типа волос / кожи подходит\n"
+        "• Плюсы и минусы\n"
+        "• Честный совет\n\n"
+        "Отправляй фото — начнём! 🚀"
     )
 
 
 def handle_photo(msg):
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
-    if not user_can_scan(user_id):
-        send_message(chat_id,
-            f"ð Besplatnyj analiz ispol'zovan.\n\n"
-            f"Oformi podpisku za {STARS_PRICE} â­ v mesyac - skaniraj bez ogranichenij! ð"
-        )
-        send_invoice(chat_id, user_id)
-        return
-    send_message(chat_id, "ð Analiziruyu produkt, podozdi nemnogo...")
+    send_message(chat_id, "🔍 Анализирую продукт, подожди немного...")
     try:
         photo = msg["photo"][-1]
         file_info = tg("getFile", {"file_id": photo["file_id"]})
         image_bytes = download_file(file_info["result"]["file_path"])
         image_hash = hashlib.md5(image_bytes).hexdigest()
-        user = get_user(user_id)
-        if not has_active_sub(user):
-            increment_free_scans(user_id)
         cached = get_cached_analysis(image_hash)
         if cached:
-            send_message(chat_id, cached["analysis"])
+            analysis = cached["analysis"]
+            product_id = cached["id"]
+            send_message(chat_id, analysis)
             send_message(chat_id,
-                "ð¦ Produkt uzhe v baze - otvet iz kesha â\n\nTy polzueshsya etim produktom?",
-                reply_markup={"inline_keyboard": [[{"text": "â Da", "callback_data": f"uses_yes_{cached['id']}"}, {"text": "â Net", "callback_data": f"uses_no_{cached['id']}"}]]}
+                "📦 Этот продукт уже в нашей базе — ответ из кэша ✅\n\nТы пользуешься этим продуктом?",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "✅ Да", "callback_data": f"uses_yes_{product_id}"},
+                    {"text": "❌ Нет", "callback_data": f"uses_no_{product_id}"}
+                ]]}
             )
         else:
             analysis = analyze_image(image_bytes)
-            product_id = save_analysis(image_hash, extract_product_name(analysis), analysis)
+            product_name = extract_product_name(analysis)
+            product_id = save_analysis(image_hash, product_name, analysis)
             send_message(chat_id, analysis)
             if product_id:
-                send_message(chat_id, "Ty polzueshsya etim produktom?",
-                    reply_markup={"inline_keyboard": [[{"text": "â Da", "callback_data": f"uses_yes_{product_id}"}, {"text": "â Net", "callback_data": f"uses_no_{product_id}"}]]}
+                send_message(chat_id,
+                    "Ты пользуешься этим продуктом?",
+                    reply_markup={"inline_keyboard": [[
+                        {"text": "✅ Да", "callback_data": f"uses_yes_{product_id}"},
+                        {"text": "❌ Нет", "callback_data": f"uses_no_{product_id}"}
+                    ]]}
                 )
     except Exception as e:
-        print(f"Error: {e}")
-        send_message(chat_id, "â Oshibka. Poprobuj eshche raz.")
+        print(f"Error analyzing: {e}")
+        send_message(chat_id, "❌ Ошибка при анализе. Попробуй ещё раз.")
 
 
 def handle_callback(callback):
-    tg("answerCallbackQuery", {"callback_query_id": callback["id"]})
+    query_id = callback["id"]
     user_id = callback["from"]["id"]
     chat_id = callback["message"]["chat"]["id"]
     data = callback.get("data", "")
+    tg("answerCallbackQuery", {"callback_query_id": query_id})
     if data.startswith("uses_yes_") or data.startswith("uses_no_"):
         uses = data.startswith("uses_yes_")
         product_id = int(data.split("_")[-1])
         save_user_product(user_id, product_id, uses)
-        send_message(chat_id, "â Zapisal v kollekciju! ð" if uses else "ð Ponyatno, spasibo!")
-
-
-def handle_pre_checkout(pq):
-    tg("answerPreCheckoutQuery", {"pre_checkout_query_id": pq["id"], "ok": True})
-
-
-def handle_successful_payment(msg):
-    user_id = msg["from"]["id"]
-    chat_id = msg["chat"]["id"]
-    until = activate_subscription(user_id)
-    send_message(chat_id, f"ð Oplata proshla! Podpiska aktivna do {until.strftime('%d.%m.%Y')}.\n\nSkaniraj bez ogranichenij! ð¸")
+        if uses:
+            send_message(chat_id, "✅ Записал! Продукт добавлен в твою коллекцию 📚")
+        else:
+            send_message(chat_id, "👍 Понял, спасибо за ответ!")
 
 
 def main():
@@ -287,40 +246,34 @@ def main():
             init_db()
             break
         except Exception as e:
-            print(f"DB attempt {attempt+1} failed: {e}")
+            print(f"DB connect attempt {attempt+1} failed: {e}")
             time.sleep(5)
     print("Bot started...")
     offset = None
     while True:
         try:
-            params = {"timeout": 30, "allowed_updates": ["message", "callback_query", "pre_checkout_query"]}
+            params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
             if offset:
                 params["offset"] = offset
             resp = requests.get(f"{API_URL}/getUpdates", params=params, timeout=35, verify=VERIFY)
             data = resp.json()
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
-                if "pre_checkout_query" in update:
-                    handle_pre_checkout(update["pre_checkout_query"])
-                elif "callback_query" in update:
+                if "callback_query" in update:
                     handle_callback(update["callback_query"])
-                else:
-                    msg = update.get("message", {})
-                    if not msg:
-                        continue
-                    chat_id = msg.get("chat", {}).get("id")
-                    if not chat_id:
-                        continue
-                    if msg.get("successful_payment"):
-                        handle_successful_payment(msg)
-                    elif msg.get("text") == "/start":
-                        handle_start(msg)
-                    elif msg.get("text") == "/subscribe":
-                        send_invoice(chat_id, msg["from"]["id"])
-                    elif msg.get("photo"):
-                        handle_photo(msg)
-                    elif msg.get("text"):
-                        send_message(chat_id, "ð¸ Otprav foto kosmetiki!")
+                    continue
+                msg = update.get("message", {})
+                if not msg:
+                    continue
+                chat_id = msg.get("chat", {}).get("id")
+                if not chat_id:
+                    continue
+                if msg.get("text") == "/start":
+                    handle_start(msg)
+                elif msg.get("photo"):
+                    handle_photo(msg)
+                elif msg.get("text"):
+                    send_message(chat_id, "📸 Отправь фото косметики — я сделаю анализ!")
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(3)
