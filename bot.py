@@ -90,10 +90,28 @@ def main():
                 chat_id = msg.get("chat", {}).get("id")
                 if not chat_id:
                     continue
+
                 if msg.get("text") == "/start":
-                    send_message(chat_id, "👋 Привет! Отправь фото косметики — я сделаю анализ!")
+                    name = msg.get("from", {}).get("first_name", "")
+                    greeting = f"Привет, {name}! 👋" if name else "Привет! 👋"
+                    send_message(chat_id,
+                        greeting + "\n\n"
+                        "Я — бот-косметолог 🧴\n"
+                        "Разбираю состав косметики и говорю честно — стоит ли она своих денег.\n\n"
+                        "📸 Просто пришли фото продукта, и я расскажу:\n"
+                        "• Что за бренд и продукт\n"
+                        "• Оценка от 1 до 10 ⭐\n"
+                        "• Ключевые компоненты состава\n"
+                        "• Для какого типа волос / кожи подходит\n"
+                        "• Плюсы и минусы\n"
+                        "• Мой честный совет\n\n"
+                        "Работает с любой косметикой:\n"
+                        "шампунь, крем, маска, тушь, сыворотка — всё 💄\n\n"
+                        "Отправляй фото — начнём! 🚀"
+                    )
+
                 elif msg.get("photo"):
-                    send_message(chat_id, "🔍 Анализирую продукт...")
+                    send_message(chat_id, "🔍 Анализирую продукт, подожди немного...")
                     try:
                         photo = msg["photo"][-1]
                         file_info = tg("getFile", {"file_id": photo["file_id"]})
@@ -101,9 +119,12 @@ def main():
                         analysis = analyze_image(image_bytes)
                         send_message(chat_id, analysis)
                     except Exception as e:
+                        print(f"Error analyzing: {e}")
                         send_message(chat_id, "❌ Ошибка. Попробуй ещё раз.")
+
                 elif msg.get("text"):
-                    send_message(chat_id, "📸 Отправь фото косметики!")
+                    send_message(chat_id, "📸 Отправь фото косметики — я сделаю анализ!")
+
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(3)
