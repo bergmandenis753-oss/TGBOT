@@ -50,6 +50,11 @@ def init_db():
                     subscription_until TIMESTAMP, created_at TIMESTAMP DEFAULT NOW()
                 );
             """)
+            # Migrate old DB - add columns if missing
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS free_scans_used INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMP;
+            """)
         conn.commit()
     print("DB initialized")
 
@@ -199,17 +204,17 @@ def handle_start(msg):
     user_id = msg["from"]["id"]
     name = msg.get("from", {}).get("first_name", "")
     get_user(user_id)
-    greeting = f"Privet, {name}! 👋" if name else "Privet! 👋"
+    greeting = f"Privet, {name}! ð" if name else "Privet! ð"
     send_message(chat_id,
-        greeting + "\n\nYa - bot-kosmetolog 🧴\n"
+        greeting + "\n\nYa - bot-kosmetolog ð§´\n"
         "Razbiraju sostav kosmetiki i govorju chestno.\n\n"
-        "📸 Prosti foto produkta - rasskazhu:\n"
-        "- Brend i nazvanie\n- Ocenka 1-10 ⭐\n"
+        "ð¸ Prosti foto produkta - rasskazhu:\n"
+        "- Brend i nazvanie\n- Ocenka 1-10 â­\n"
         "- Sostav i komponenty\n- Dlya kakogo tipa volos/kozhi\n"
         "- Plyusy i minusy\n- Chestnyj sovet\n\n"
-        f"🎁 U tebya est {FREE_SCANS} besplatnyj analiz.\n"
-        f"Dalee - podpiska {STARS_PRICE} ⭐ v mesyac.\n\n"
-        "Otpravlyaj foto - nachnem! 🚀"
+        f"ð U tebya est {FREE_SCANS} besplatnyj analiz.\n"
+        f"Dalee - podpiska {STARS_PRICE} â­ v mesyac.\n\n"
+        "Otpravlyaj foto - nachnem! ð"
     )
 
 
@@ -218,12 +223,12 @@ def handle_photo(msg):
     user_id = msg["from"]["id"]
     if not user_can_scan(user_id):
         send_message(chat_id,
-            f"🔒 Besplatnyj analiz ispol'zovan.\n\n"
-            f"Oformi podpisku za {STARS_PRICE} ⭐ v mesyac - skaniraj bez ogranichenij! 👇"
+            f"ð Besplatnyj analiz ispol'zovan.\n\n"
+            f"Oformi podpisku za {STARS_PRICE} â­ v mesyac - skaniraj bez ogranichenij! ð"
         )
         send_invoice(chat_id, user_id)
         return
-    send_message(chat_id, "🔍 Analiziruyu produkt, podozdi nemnogo...")
+    send_message(chat_id, "ð Analiziruyu produkt, podozdi nemnogo...")
     try:
         photo = msg["photo"][-1]
         file_info = tg("getFile", {"file_id": photo["file_id"]})
@@ -236,8 +241,8 @@ def handle_photo(msg):
         if cached:
             send_message(chat_id, cached["analysis"])
             send_message(chat_id,
-                "📦 Produkt uzhe v baze - otvet iz kesha ✅\n\nTy polzueshsya etim produktom?",
-                reply_markup={"inline_keyboard": [[{"text": "✅ Da", "callback_data": f"uses_yes_{cached['id']}"}, {"text": "❌ Net", "callback_data": f"uses_no_{cached['id']}"}]]}
+                "ð¦ Produkt uzhe v baze - otvet iz kesha â\n\nTy polzueshsya etim produktom?",
+                reply_markup={"inline_keyboard": [[{"text": "â Da", "callback_data": f"uses_yes_{cached['id']}"}, {"text": "â Net", "callback_data": f"uses_no_{cached['id']}"}]]}
             )
         else:
             analysis = analyze_image(image_bytes)
@@ -245,11 +250,11 @@ def handle_photo(msg):
             send_message(chat_id, analysis)
             if product_id:
                 send_message(chat_id, "Ty polzueshsya etim produktom?",
-                    reply_markup={"inline_keyboard": [[{"text": "✅ Da", "callback_data": f"uses_yes_{product_id}"}, {"text": "❌ Net", "callback_data": f"uses_no_{product_id}"}]]}
+                    reply_markup={"inline_keyboard": [[{"text": "â Da", "callback_data": f"uses_yes_{product_id}"}, {"text": "â Net", "callback_data": f"uses_no_{product_id}"}]]}
                 )
     except Exception as e:
         print(f"Error: {e}")
-        send_message(chat_id, "❌ Oshibka. Poprobuj eshche raz.")
+        send_message(chat_id, "â Oshibka. Poprobuj eshche raz.")
 
 
 def handle_callback(callback):
@@ -261,7 +266,7 @@ def handle_callback(callback):
         uses = data.startswith("uses_yes_")
         product_id = int(data.split("_")[-1])
         save_user_product(user_id, product_id, uses)
-        send_message(chat_id, "✅ Zapisal v kollekciju! 📚" if uses else "👍 Ponyatno, spasibo!")
+        send_message(chat_id, "â Zapisal v kollekciju! ð" if uses else "ð Ponyatno, spasibo!")
 
 
 def handle_pre_checkout(pq):
@@ -272,7 +277,7 @@ def handle_successful_payment(msg):
     user_id = msg["from"]["id"]
     chat_id = msg["chat"]["id"]
     until = activate_subscription(user_id)
-    send_message(chat_id, f"🎉 Oplata proshla! Podpiska aktivna do {until.strftime('%d.%m.%Y')}.\n\nSkaniraj bez ogranichenij! 📸")
+    send_message(chat_id, f"ð Oplata proshla! Podpiska aktivna do {until.strftime('%d.%m.%Y')}.\n\nSkaniraj bez ogranichenij! ð¸")
 
 
 def main():
@@ -315,7 +320,7 @@ def main():
                     elif msg.get("photo"):
                         handle_photo(msg)
                     elif msg.get("text"):
-                        send_message(chat_id, "📸 Otprav foto kosmetiki!")
+                        send_message(chat_id, "ð¸ Otprav foto kosmetiki!")
         except Exception as e:
             print(f"Error: {e}")
             time.sleep(3)
