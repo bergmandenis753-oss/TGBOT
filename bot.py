@@ -23,74 +23,74 @@ VERIFY = False
 QUIZ_STEPS = [
     {
         "key": "goal",
-        "block": "Блок I · Цель",
+        "block": "🎯 Цель",
         "question": (
             "Что вы хотите изменить или улучшить в своих волосах?\n\n"
             "Напишите своими словами — например:\n"
-            "· Хочу быстрее отрастить волосы\n"
-            "· Хочу сделать волосы гуще\n"
-            "· Хочу избавиться от жирности\n"
-            "· Хочу научиться пользоваться стайлерами"
+            "· Быстрее отрастить волосы\n"
+            "· Сделать волосы гуще\n"
+            "· Избавиться от жирности\n"
+            "· Научиться пользоваться стайлерами"
         ),
         "type": "text"
     },
     {
         "key": "problem",
-        "block": "Блок II · Проблемы",
+        "block": "🌿 Что беспокоит",
         "question": (
             "Что вас сейчас больше всего беспокоит в ваших волосах?\n\n"
             "Напишите своими словами — например:\n"
-            "· Волосы быстро становятся грязными\n"
-            "· Есть перхоть\n"
-            "· Волосы выпадают\n"
-            "· Волосы сухие и ломкие\n"
-            "· Не получается сделать укладку"
+            "· Быстро становятся грязными\n"
+            "· Перхоть\n"
+            "· Выпадение\n"
+            "· Сухость и ломкость\n"
+            "· Не получается укладка"
         ),
         "type": "text"
     },
     {
         "key": "age",
-        "block": "Блок III · Ваш профиль",
+        "block": "👤 Профиль",
         "question": "Сколько вам лет?",
         "type": "text"
     },
     {
         "key": "gender",
-        "block": "Блок III · Ваш профиль",
+        "block": "👤 Профиль",
         "question": "Ваш пол?",
         "type": "buttons",
         "options": ["Женский", "Мужской", "Предпочитаю не указывать"]
     },
     {
         "key": "country",
-        "block": "Блок III · Ваш профиль",
+        "block": "🌍 Профиль",
         "question": (
             "В какой стране вы живёте?\n\n"
-            "◦ Мы учитываем климат, жёсткость воды\n"
-            "◦ и доступность средств в вашем регионе"
+            "Это нужно, чтобы учесть климат, жёсткость воды\n"
+            "и доступность средств в вашем регионе."
         ),
         "type": "text"
     },
     {
         "key": "city",
-        "block": "Блок III · Ваш профиль",
+        "block": "🌍 Профиль",
         "question": "В каком городе вы живёте?",
         "type": "text"
     },
     {
         "key": "wash_frequency",
-        "block": "Блок IV · Повседневные привычки",
+        "block": "💧 Привычки",
         "question": "Как часто вы моете голову?",
         "type": "buttons",
         "options": ["Каждый день", "Через день", "2–3 раза в неделю", "Реже"]
     },
     {
         "key": "styling_time",
-        "block": "Блок IV · Повседневные привычки",
+        "block": "✨ Привычки",
         "question": (
             "Сколько времени обычно занимает ваша укладка?\n\n"
-            "◦ Это помогает нам понять ваши привычки\n"
-            "◦ и подобрать подходящие рекомендации"
+            "Это помогает понять ваши привычки\n"
+            "и подобрать подходящие рекомендации."
         ),
         "type": "buttons",
         "options": ["Не укладываю", "До 5 минут", "5–15 минут", "Более 15 минут"]
@@ -282,9 +282,14 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
 def send_quiz_question(chat_id, step_index):
     step = QUIZ_STEPS[step_index]
     total = len(QUIZ_STEPS)
-    progress = "·" * (step_index + 1) + "○" * (total - step_index - 1)
+    done = step_index + 1
+    # Элегантный прогресс: заполненные ромбы и тонкие разделители
+    progress = "◆ " * done + "◇ " * (total - done)
 
-    header = f"{step['block']}\n{progress}  {step_index + 1} из {total}\n\n"
+    header = (
+        f"{step['block']}   ·   шаг {done} из {total}\n"
+        f"{progress.strip()}\n\n"
+    )
     text = header + step["question"]
 
     if step["type"] == "buttons":
@@ -396,6 +401,38 @@ def extract_product_name(analysis):
     return "Продукт"
 
 
+def classify_photo(image_bytes):
+    """Определяет, что на фото: волосы/селфи или косметическое средство.
+    Возвращает 'hair' или 'product'."""
+    image_b64 = base64.standard_b64encode(image_bytes).decode()
+    prompt = (
+        "Посмотри на фото и определи, что на нём изображено. "
+        "Ответь СТРОГО одним словом без знаков препинания:\n"
+        "· hair — если это волосы, причёска, голова или селфи человека\n"
+        "· product — если это косметическое/уходовое средство (флакон, тюбик, банка, упаковка)\n"
+        "Если сомневаешься между двумя — выбери то, что занимает большую часть кадра."
+    )
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 5,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}", "detail": "low"}},
+                    {"type": "text", "text": prompt}
+                ]}]
+            },
+            verify=VERIFY
+        )
+        answer = resp.json()["choices"][0]["message"]["content"].strip().lower()
+        return "hair" if "hair" in answer else "product"
+    except Exception as e:
+        print(f"Classify error: {e}")
+        return "product"
+
+
 def analyze_hair(image_bytes):
     """GPT описывает структуру и особенности волос по фото/селфи."""
     image_b64 = base64.standard_b64encode(image_bytes).decode()
@@ -425,34 +462,34 @@ def analyze_hair(image_bytes):
 def generate_final_report(user):
     """Итоговый персональный разбор по всей базе пользователя."""
     profile = build_profile_text(user, include_hair=True, include_products=True)
-    prompt = f"""Ты — элегантный личный эксперт по волосам. Твой стиль — дорогой, женственный, заботливый, поддерживающий. Только тёплые формулировки, никаких грубых слов.
+    prompt = f"""Ты — профессиональный консультант по волосам. Пиши честно, по делу и структурно, как эксперт, а не как продавец. Без комплиментов, без лести, без фраз вроде «у вас прекрасные стремления». Не оценивай человека — оценивай ситуацию с волосами и давай конкретику. Тон спокойный, уважительный, не приторный.
 
-Вот всё, что мы знаем о человеке:
+Данные о человеке:
 {profile}
 
-Составь персональный разбор и план, чтобы помочь достичь её цели. Опирайся на её профиль, привычки, состояние волос и средства, которыми она пользуется (если есть — отметь, что стоит оставить, а что заменить). Отвечай только про волосы и связанное с ними здоровье.
+Составь разбор и план под его цель. Опирайся строго на эти данные: профиль, привычки, состояние волос, используемые средства (если они есть — честно скажи, что оставить, а что заменить и почему). Только про волосы и связанное с ними здоровье. Не выдумывай факты, которых нет в данных. Давай конкретные действия и цифры, где уместно (частота, что искать в составе, какие нутриенты).
 
-Структура ответа (оформление только символами ✦ — · ◦, без ✅ и ❌):
+Структура (оформление только символами ✦ — · ◦, без ✅ и ❌, без эмодзи):
 
-✦ КОРОТКО
-— Тёплое резюме ситуации в 2–3 строки
+✦ СИТУАЦИЯ
+— 2–3 строки: что в данных указывает на текущее состояние и в чём суть задачи
 
-✦ ЧТО ПРОИСХОДИТ С ВОЛОСАМИ
-— Разбор причин на основе профиля
+✦ ПРИЧИНЫ
+— Почему так происходит, на основе привычек и профиля
 
-✦ ПЛАН · УХОД
-— Конкретные шаги по уходу и мытью
+✦ УХОД
+— Конкретные шаги: частота мытья, температура воды, техника
 
-✦ ПЛАН · СРЕДСТВА
-— Что искать в составе, что использовать; с учётом её средств
+✦ СРЕДСТВА
+— Что искать в составе и что использовать; с разбором уже используемых средств
 
-✦ ПЛАН · ПИТАНИЕ И ЗДОРОВЬЕ
-— Что важно для волос: жиры, белок, коллаген, витамины и т.д.
+✦ ПИТАНИЕ И ЗДОРОВЬЕ
+— Конкретные нутриенты для волос: белок, омега-3, железо, цинк, витамины, коллаген — с примерами продуктов
 
 ✦ ПЕРВЫЙ ШАГ
-— Один простой шаг, с которого начать уже сегодня
+— Один конкретный шаг на сегодня
 
-Будь конкретной и честной, но мягкой."""
+Будь честным и точным. Если данных мало для какого-то раздела — так и скажи, не придумывай."""
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
@@ -486,6 +523,9 @@ def handle_start(msg):
         "◦ Персональные рекомендации по уходу\n"
         "◦ Советы по укладке и восстановлению\n"
         "◦ Помощь с выбором средств в вашем регионе\n\n"
+        "Команды:\n"
+        "· /start — пройти опрос заново\n"
+        "· /stats — посмотреть ваш профиль и перейти к разбору\n\n"
         "Прежде чем начать — позвольте узнать вас чуть лучше.\n"
         "Небольшой опрос займёт всего пару минут ◦"
     )
@@ -629,12 +669,8 @@ def deliver_final_report(chat_id, user_id):
         )
 
 
-def handle_stats(msg):
+def show_profile(chat_id, user_id, username="", first_name=""):
     """Показывает пользователю его сохранённый профиль."""
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    username = msg["from"].get("username", "")
-    first_name = msg["from"].get("first_name", "")
 
     user = get_user(user_id, username=username, first_name=first_name)
 
@@ -681,7 +717,82 @@ def handle_stats(msg):
         for p in products:
             lines.append(f"· {p}")
 
-    send_message(chat_id, "\n".join(lines))
+    send_message(chat_id, "\n".join(lines),
+        reply_markup={"inline_keyboard": [[
+            {"text": "Продолжить ›", "callback_data": "menu_open"}
+        ]]}
+    )
+
+
+def handle_stats(msg):
+    """Команда /stats из обычного сообщения."""
+    chat_id = msg["chat"]["id"]
+    frm = msg.get("from", {})
+    show_profile(chat_id, frm["id"], frm.get("username", ""), frm.get("first_name", ""))
+
+
+def send_action_menu(chat_id):
+    """Меню из трёх действий после «Продолжить»."""
+    send_message(chat_id,
+        "Что хотите сделать дальше?",
+        reply_markup={"inline_keyboard": [
+            [{"text": "✦ Приступить к разбору волос", "callback_data": "act_report"}],
+            [{"text": "📷 Прислать фото (волосы или средство)", "callback_data": "act_photo"}],
+            [{"text": "👤 Мой профиль", "callback_data": "act_profile"}],
+        ]}
+    )
+
+
+def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
+    """Анализ фото волос → запись в БД. При then_report — затем выдать разбор."""
+    send_message(chat_id, "✦ Изучаю ваши волосы...")
+    try:
+        hair = analyze_hair(image_bytes)
+        update_user(user_id, hair_analysis=hair)
+        send_message(chat_id, "✦ Что видно о ваших волосах:\n\n" + hair)
+    except Exception as e:
+        print(f"Error hair analysis: {e}")
+        send_message(chat_id, "◦ Не удалось разобрать фото волос.")
+    if then_report:
+        deliver_final_report(chat_id, user_id)
+
+
+def process_product_photo(chat_id, user, image_bytes):
+    """Анализ фото косметического средства."""
+    user_id = user["user_id"]
+    send_message(chat_id,
+        "✦ Анализирую средство...\n\n"
+        "◦ Изучаю состав\n"
+        "◦ Сверяю с вашим профилем\n"
+        "◦ Готовлю отчёт"
+    )
+    try:
+        image_hash = hashlib.md5(image_bytes).hexdigest()
+        cached = get_cached_analysis(image_hash)
+        if cached:
+            analysis = cached["analysis"]
+            product_id = cached["id"]
+            send_message(chat_id, analysis)
+            note = "◦ Это средство уже было в нашей базе\n\nВы пользуетесь им?"
+        else:
+            analysis = analyze_image(image_bytes, user=user)
+            product_name = extract_product_name(analysis)
+            product_id = save_analysis(image_hash, product_name, analysis)
+            send_message(chat_id, analysis)
+            note = "Вы пользуетесь этим средством?"
+        if product_id:
+            send_message(chat_id, note,
+                reply_markup={"inline_keyboard": [[
+                    {"text": "Да, использую", "callback_data": f"uses_yes_{product_id}"},
+                    {"text": "Нет, присматриваюсь", "callback_data": f"uses_no_{product_id}"}
+                ]]}
+            )
+    except Exception as e:
+        print(f"Error analyzing product: {e}")
+        send_message(chat_id,
+            "◦ Произошла ошибка при анализе.\n"
+            "Пожалуйста, попробуйте ещё раз или отправьте другое фото."
+        )
 
 
 def handle_photo(msg):
@@ -702,68 +813,27 @@ def handle_photo(msg):
         send_quiz_question(chat_id, step_index)
         return
 
-    # Ожидаем фото волос/селфи после квиза
-    if user.get("awaiting") == "hair_photo":
-        send_message(chat_id, "✦ Изучаю ваши волосы...")
-        try:
-            photo = msg["photo"][-1]
-            file_info = tg("getFile", {"file_id": photo["file_id"]})
-            image_bytes = download_file(file_info["result"]["file_path"])
-            hair = analyze_hair(image_bytes)
-            update_user(user_id, hair_analysis=hair)
-            send_message(chat_id, "✦ Вот что я увидела о ваших волосах:\n\n" + hair)
-        except Exception as e:
-            print(f"Error hair analysis: {e}")
-            send_message(chat_id, "◦ Не удалось разобрать фото волос, но это не помешает — перейдём к разбору.")
-        deliver_final_report(chat_id, user_id)
-        return
-
-    send_message(chat_id,
-        "✦ Анализирую средство...\n\n"
-        "◦ Изучаю состав\n"
-        "◦ Сверяю с вашим профилем\n"
-        "◦ Готовлю персональный отчёт"
-    )
-
+    # Скачиваем фото один раз
     try:
         photo = msg["photo"][-1]
         file_info = tg("getFile", {"file_id": photo["file_id"]})
         image_bytes = download_file(file_info["result"]["file_path"])
-        image_hash = hashlib.md5(image_bytes).hexdigest()
-
-        cached = get_cached_analysis(image_hash)
-        if cached:
-            analysis = cached["analysis"]
-            product_id = cached["id"]
-            send_message(chat_id, analysis)
-            send_message(chat_id,
-                "◦ Это средство уже было в нашей базе\n\n"
-                "Вы пользуетесь им?",
-                reply_markup={"inline_keyboard": [[
-                    {"text": "Да, использую", "callback_data": f"uses_yes_{product_id}"},
-                    {"text": "Нет, присматриваюсь", "callback_data": f"uses_no_{product_id}"}
-                ]]}
-            )
-        else:
-            analysis = analyze_image(image_bytes, user=user)
-            product_name = extract_product_name(analysis)
-            product_id = save_analysis(image_hash, product_name, analysis)
-            send_message(chat_id, analysis)
-            if product_id:
-                send_message(chat_id,
-                    "Вы пользуетесь этим средством?",
-                    reply_markup={"inline_keyboard": [[
-                        {"text": "Да, использую", "callback_data": f"uses_yes_{product_id}"},
-                        {"text": "Нет, присматриваюсь", "callback_data": f"uses_no_{product_id}"}
-                    ]]}
-                )
-
     except Exception as e:
-        print(f"Error analyzing: {e}")
-        send_message(chat_id,
-            "◦ Произошла ошибка при анализе.\n"
-            "Пожалуйста, попробуйте ещё раз или отправьте другое фото."
-        )
+        print(f"Error downloading photo: {e}")
+        send_message(chat_id, "◦ Не удалось загрузить фото. Попробуйте ещё раз.")
+        return
+
+    # Если бот ждёт фото волос после квиза — это точно волосы
+    if user.get("awaiting") == "hair_photo":
+        process_hair_photo(chat_id, user_id, image_bytes, then_report=True)
+        return
+
+    # Иначе сами определяем, что на фото: волосы или средство
+    kind = classify_photo(image_bytes)
+    if kind == "hair":
+        process_hair_photo(chat_id, user_id, image_bytes, then_report=False)
+    else:
+        process_product_photo(chat_id, user, image_bytes)
 
 
 def handle_callback(callback):
@@ -785,6 +855,24 @@ def handle_callback(callback):
     if data == "skip_hair":
         if user.get("awaiting") == "hair_photo":
             deliver_final_report(chat_id, user_id)
+        return
+
+    # Меню после /stats
+    if data == "menu_open":
+        send_action_menu(chat_id)
+        return
+    if data == "act_report":
+        deliver_final_report(chat_id, user_id)
+        return
+    if data == "act_photo":
+        send_message(chat_id,
+            "📷 Пришлите фото — волос/селфи или косметического средства.\n"
+            "Я сама пойму, что на фото, и сделаю нужный разбор."
+        )
+        return
+    if data == "act_profile":
+        frm = callback.get("from", {})
+        show_profile(chat_id, user_id, frm.get("username", ""), frm.get("first_name", ""))
         return
 
     if data.startswith("uses_yes_") or data.startswith("uses_no_"):
