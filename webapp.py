@@ -185,6 +185,67 @@ async def api_cosmetics_all(request: Request):
     return {"items": items}
 
 
+def normalize_name(name):
+    import re
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"[^\wа-я0-9 ]", " ", s)
+    words = [w for w in s.split() if w not in ("от", "by", "из")]
+    return " ".join(sorted(words))
+
+
+@app.post("/api/cosmetic_delete")
+async def api_cosmetic_delete(request: Request):
+    """Удаление средства из личной базы пользователя."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    cos_id = body.get("id")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM user_cosmetics WHERE id = %s AND user_id = %s", (cos_id, user_id))
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/reviews")
+async def api_reviews(request: Request):
+    """Отзывы по средству (общие, по нормализованному названию)."""
+    body = await request.json()
+    get_user_id(body)
+    name = body.get("name") or ""
+    norm = normalize_name(name)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT first_name, text, created_at FROM reviews WHERE product_norm = %s "
+                "ORDER BY created_at DESC LIMIT 50",
+                (norm,)
+            )
+            rows = cur.fetchall()
+    return {"reviews": [{"author": r["first_name"] or "Гость", "text": r["text"]} for r in rows]}
+
+
+@app.post("/api/review_add")
+async def api_review_add(request: Request):
+    """Добавить отзыв о средстве."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    u = fetch_user(user_id)
+    name = (body.get("name") or "").strip()
+    text = (body.get("text") or "").strip()
+    if not name or not text:
+        return {"ok": False}
+    norm = normalize_name(name)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO reviews (product_norm, product_name, user_id, first_name, text) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (norm, name, user_id, (u or {}).get("first_name") or "Гость", text)
+            )
+        conn.commit()
+    return {"ok": True}
+
+
 @app.post("/api/tasks")
 async def api_tasks(request: Request):
     body = await request.json()

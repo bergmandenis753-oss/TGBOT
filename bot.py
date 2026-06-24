@@ -135,6 +135,15 @@ def init_db():
                     text TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS reviews (
+                    id SERIAL PRIMARY KEY,
+                    product_norm TEXT,
+                    product_name TEXT,
+                    user_id BIGINT,
+                    first_name TEXT,
+                    text TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS summary TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS ingredients TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS usage TEXT;
@@ -269,11 +278,32 @@ def get_user_products_used(user_id):
         return []
 
 
+def normalize_name(name):
+    """Нормализует название средства для сравнения дублей:
+    нижний регистр, убираем «от/by», знаки, сортируем слова."""
+    import re
+    s = (name or "").lower()
+    s = s.replace("ё", "е")
+    s = re.sub(r"[^\wа-я0-9 ]", " ", s)
+    words = [w for w in s.split() if w not in ("от", "by", "из")]
+    return " ".join(sorted(words))
+
+
 def save_user_cosmetic(user_id, product_name, analysis, summary="", ingredients="", usage=""):
-    """Сохраняет скан косметики в личную базу пользователя."""
+    """Сохраняет скан косметики в личную базу. Дубли (по нормализованному имени) не создаёт — обновляет."""
     try:
+        norm = normalize_name(product_name)
         with get_db() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT id, product_name FROM user_cosmetics WHERE user_id = %s", (user_id,))
+                for r in cur.fetchall():
+                    if normalize_name(r["product_name"]) == norm:
+                        cur.execute(
+                            "UPDATE user_cosmetics SET analysis=%s, summary=%s, ingredients=%s, usage=%s WHERE id=%s",
+                            (analysis, summary, ingredients, usage, r["id"])
+                        )
+                        conn.commit()
+                        return r["id"]
                 cur.execute(
                     "INSERT INTO user_cosmetics (user_id, product_name, analysis, summary, ingredients, usage) "
                     "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
