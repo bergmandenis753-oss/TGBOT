@@ -142,13 +142,19 @@ async def api_cosmetics(request: Request):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, product_name, analysis, created_at FROM user_cosmetics "
-                "WHERE user_id = %s ORDER BY created_at DESC, id DESC",
+                "SELECT id, product_name, analysis, summary, ingredients, usage, created_at "
+                "FROM user_cosmetics WHERE user_id = %s ORDER BY created_at DESC, id DESC",
                 (user_id,)
             )
             rows = cur.fetchall()
-    items = [{"id": r["id"], "name": r["product_name"] or "Косметика",
-              "analysis": r["analysis"] or ""} for r in rows]
+    items = [{
+        "id": r["id"],
+        "name": r["product_name"] or "Косметика",
+        "summary": r.get("summary") or "",
+        "ingredients": r.get("ingredients") or "",
+        "usage": r.get("usage") or "",
+        "analysis": r["analysis"] or "",
+    } for r in rows]
     return {"items": items}
 
 

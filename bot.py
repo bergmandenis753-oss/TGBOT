@@ -164,8 +164,14 @@ def init_db():
                     user_id BIGINT,
                     product_name TEXT,
                     analysis TEXT,
+                    summary TEXT,
+                    ingredients TEXT,
+                    usage TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+                ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS summary TEXT;
+                ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS ingredients TEXT;
+                ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS usage TEXT;
             """)
             # Миграция — добавляем колонки если нет
             for col, coltype in [
@@ -296,18 +302,22 @@ def get_user_products_used(user_id):
         return []
 
 
-def save_user_cosmetic(user_id, product_name, analysis):
+def save_user_cosmetic(user_id, product_name, analysis, summary="", ingredients="", usage=""):
     """Сохраняет скан косметики в личную базу пользователя."""
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO user_cosmetics (user_id, product_name, analysis) VALUES (%s, %s, %s)",
-                    (user_id, product_name, analysis)
+                    "INSERT INTO user_cosmetics (user_id, product_name, analysis, summary, ingredients, usage) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    (user_id, product_name, analysis, summary, ingredients, usage)
                 )
+                row = cur.fetchone()
                 conn.commit()
+                return row["id"] if row else None
     except Exception as e:
         print(f"DB save cosmetic error: {e}")
+        return None
 
 
 def get_user_cosmetics(user_id):
@@ -316,7 +326,7 @@ def get_user_cosmetics(user_id):
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, product_name, analysis FROM user_cosmetics "
+                    "SELECT id, product_name, analysis, summary, ingredients, usage FROM user_cosmetics "
                     "WHERE user_id = %s ORDER BY created_at, id",
                     (user_id,)
                 )
@@ -500,37 +510,44 @@ def build_profile_text(user, include_hair=False, include_products=False):
 
 
 def build_analysis_prompt(user):
+    # Компактный промт: один вызов даёт 3 секции через разделители (экономия токенов).
     profile = build_profile_text(user)
-    profile_block = f"\nПрофиль пользователя:\n{profile}\n" if profile else ""
+    profile_block = f"\nПрофиль: {profile.strip()}\n" if profile else ""
+    return f"""Ты — эксперт по косметике для волос. Анализируй фото средства честно и по делу.{profile_block}
+Ответь СТРОГО в таком формате, ровно с этими разделителями, без лишнего текста, без эмодзи кроме · — :
 
-    return f"""Ты — элегантный персональный эксперт по уходу за волосами и красоте. Твой стиль — дорогой, женственный, заботливый. Никаких грубых слов, только тёплые рекомендации.{profile_block}
-Пользователь прислал фото косметического продукта. Проанализируй его и ответь строго по структуре ниже. Используй только эти символы для оформления: ✦ — · ◦. Никаких ❌ или ✅.
+===NAME===
+Название и бренд одной строкой
+===SUMMARY===
+Оценка X/10 и 2–3 строки сути: для каких волос, главный плюс и минус. С учётом профиля.
+===INGREDIENTS===
+5–7 ключевых компонентов, каждый с новой строки: — Компонент: зачем, польза или осторожность
+===USAGE===
+Как пользоваться: на сухие/влажные волосы, во время мытья или после, как часто, сколько держать, частые ошибки. 4–6 коротких пунктов с —.
+===END==="""
 
-✦ ПРОДУКТ
-— Название и бренд (если видно)
 
-✦ ОЦЕНКА
-— Рейтинг: X / 10
-— Одна фраза-вердикт
-
-✦ СОСТАВ · ключевые компоненты
-— Компонент: для чего, польза или осторожность
-(5–7 самых важных)
-
-✦ ДОСТОИНСТВА
-— ...
-
-✦ НА ЧТО ОБРАТИТЬ ВНИМАНИЕ
-— ...
-
-✦ КОМУ ПОДОЙДЁТ
-— Тип волос / кожи
-— Кому лучше избегать
-
-✦ ЛИЧНЫЙ СОВЕТ
-— Персональная рекомендация с учётом профиля пользователя
-
-Будь честна — если продукт не стоит своих денег, скажи об этом мягко, но прямо."""
+def parse_cosmetic_analysis(text):
+    """Разбирает ответ GPT на name/summary/ingredients/usage по разделителям."""
+    def section(tag_start, tag_end):
+        try:
+            s = text.index(tag_start) + len(tag_start)
+            e = text.index(tag_end, s)
+            return text[s:e].strip()
+        except ValueError:
+            return ""
+    name = section("===NAME===", "===SUMMARY===")
+    summary = section("===SUMMARY===", "===INGREDIENTS===")
+    ingredients = section("===INGREDIENTS===", "===USAGE===")
+    usage = section("===USAGE===", "===END===")
+    if not usage:  # на случай если модель не закрыла ===END===
+        usage = section("===USAGE===", "\x00") or text.split("===USAGE===")[-1].strip()
+    return {
+        "name": (name or "Косметика")[:120],
+        "summary": summary,
+        "ingredients": ingredients,
+        "usage": usage,
+    }
 
 
 def analyze_image(image_bytes, user=None):
@@ -541,7 +558,7 @@ def analyze_image(image_bytes, user=None):
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json={
             "model": "gpt-4o-mini",
-            "max_tokens": 1200,
+            "max_tokens": 1100,
             "messages": [{"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}", "detail": "low"}},
                 {"type": "text", "text": prompt}
@@ -550,17 +567,6 @@ def analyze_image(image_bytes, user=None):
         verify=VERIFY
     )
     return resp.json()["choices"][0]["message"]["content"]
-
-
-def extract_product_name(analysis):
-    for line in analysis.split("\n"):
-        if "ПРОДУКТ" in line.upper():
-            continue
-        if "—" in line and len(line) > 5:
-            name = line.replace("—", "").strip()
-            if name and len(name) < 80:
-                return name
-    return "Продукт"
 
 
 def classify_photo(image_bytes):
@@ -1076,18 +1082,30 @@ def process_product_photo(chat_id, user, image_bytes):
         if cached:
             analysis = cached["analysis"]
             product_id = cached["id"]
-            consume_ai_action(user_id, way, "product")
-            send_message(chat_id, analysis)
-            note = "◦ Это средство уже было в нашей базе\n\nВы пользуетесь им?"
         else:
             analysis = analyze_image(image_bytes, user=user)
-            product_name = extract_product_name(analysis)
-            product_id = save_analysis(image_hash, product_name, analysis)
-            consume_ai_action(user_id, way, "product")
-            send_message(chat_id, analysis)
-            note = "Вы пользуетесь этим средством?"
+            parsed0 = parse_cosmetic_analysis(analysis)
+            product_id = save_analysis(image_hash, parsed0["name"], analysis)
+        consume_ai_action(user_id, way, "product")
+
+        parsed = parse_cosmetic_analysis(analysis)
+        # Сохраняем в личную базу косметики
+        cos_id = save_user_cosmetic(
+            user_id, parsed["name"], analysis,
+            summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"]
+        )
+
+        head = f"✦ {parsed['name']}\n\n{parsed['summary']}".strip()
+        detail_row = []
+        if cos_id and parsed["ingredients"]:
+            detail_row.append({"text": "Подробнее ▾", "callback_data": f"cosing_{cos_id}"})
+        if cos_id and parsed["usage"]:
+            detail_row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
+        kb = [detail_row] if detail_row else []
+        send_message(chat_id, head, reply_markup={"inline_keyboard": kb} if kb else None)
+
         if product_id:
-            send_message(chat_id, note,
+            send_message(chat_id, "Вы пользуетесь этим средством?",
                 reply_markup={"inline_keyboard": [[
                     {"text": "Да, использую", "callback_data": f"uses_yes_{product_id}"},
                     {"text": "Нет, присматриваюсь", "callback_data": f"uses_no_{product_id}"}
@@ -1138,14 +1156,19 @@ def process_scanner_photo(chat_id, user, image_bytes):
         cached = get_cached_analysis(image_hash)
         if cached:
             analysis = cached["analysis"]
-            product_name = cached.get("product_name") or "Косметика"
         else:
             analysis = analyze_image(image_bytes, user=user)
-            product_name = extract_product_name(analysis)
+
+        parsed = parse_cosmetic_analysis(analysis)
+        product_name = parsed["name"]
+        if not cached:
             save_analysis(image_hash, product_name, analysis)
 
-        # Сохраняем в личную базу косметики
-        save_user_cosmetic(user_id, product_name, analysis)
+        # Сохраняем в личную базу косметики (с разбивкой) и получаем id записи
+        cos_id = save_user_cosmetic(
+            user_id, product_name, analysis,
+            summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"]
+        )
 
         # Списываем использование
         if way == "sub":
@@ -1153,11 +1176,20 @@ def process_scanner_photo(chat_id, user, image_bytes):
         else:
             update_user(user_id, scanner_used=(user.get("scanner_used") or 0) + 1)
 
-        send_message(chat_id, analysis)
-        send_message(chat_id,
-            "◦ Сохранено в вашу базу. Открыть список: /cosmetics\n"
-            "Пришлите ещё фото или вернитесь в меню."
-        )
+        # Краткое описание + кнопки
+        head = f"✦ {product_name}\n\n{parsed['summary']}".strip()
+        buttons = []
+        if cos_id:
+            row = []
+            if parsed["ingredients"]:
+                row.append({"text": "Подробнее ▾", "callback_data": f"cosing_{cos_id}"})
+            if parsed["usage"]:
+                row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
+            if row:
+                buttons.append(row)
+        send_message(chat_id, head,
+                     reply_markup={"inline_keyboard": buttons} if buttons else None)
+        send_message(chat_id, "◦ Сохранено в вашу базу — /cosmetics или приложение /app")
     except Exception as e:
         print(f"Error scanner: {e}")
         send_message(chat_id,
@@ -1242,6 +1274,29 @@ def handle_callback(callback):
         send_mode_picker(chat_id)
         return
 
+    # Состав конкретной косметики: cosing_<id>
+    if data.startswith("cosing_"):
+        try:
+            cid = int(data.split("_")[1])
+        except (ValueError, IndexError):
+            return
+        match = next((c for c in get_user_cosmetics(user_id) if c["id"] == cid), None)
+        if match:
+            text = match.get("ingredients") or match.get("analysis") or "Нет данных о составе."
+            send_message(chat_id, "✦ Состав · " + (match.get("product_name") or "") + "\n\n" + text)
+        return
+    # Как использовать: cosuse_<id>
+    if data.startswith("cosuse_"):
+        try:
+            cid = int(data.split("_")[1])
+        except (ValueError, IndexError):
+            return
+        match = next((c for c in get_user_cosmetics(user_id) if c["id"] == cid), None)
+        if match:
+            text = match.get("usage") or "Нет инструкции по применению."
+            send_message(chat_id, "✦ Как использовать · " + (match.get("product_name") or "") + "\n\n" + text)
+        return
+
     # Открыть конкретную косметику из списка: cos_<id>
     if data.startswith("cos_"):
         try:
@@ -1251,12 +1306,22 @@ def handle_callback(callback):
         items = get_user_cosmetics(user_id)
         match = next((c for c in items if c["id"] == cos_id), None)
         if match:
+            body = match.get("summary") or match.get("analysis") or ""
+            detail_row = []
+            if match.get("ingredients"):
+                detail_row.append({"text": "Подробнее ▾", "callback_data": f"cosing_{cos_id}"})
+            if match.get("usage"):
+                detail_row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
+            kb = []
+            if detail_row:
+                kb.append(detail_row)
+            kb.append([
+                {"text": "‹ К списку", "callback_data": "cosmetics_list"},
+                {"text": "🏠 В меню", "callback_data": "home"},
+            ])
             send_message(chat_id,
-                f"✦ {match.get('product_name') or 'Косметика'}\n\n" + (match.get("analysis") or ""),
-                reply_markup={"inline_keyboard": [[
-                    {"text": "‹ К списку", "callback_data": "cosmetics_list"},
-                    {"text": "🏠 В меню", "callback_data": "home"},
-                ]]}
+                f"✦ {match.get('product_name') or 'Косметика'}\n\n" + body,
+                reply_markup={"inline_keyboard": kb}
             )
         return
     if data == "cosmetics_list":
