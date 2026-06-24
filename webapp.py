@@ -260,7 +260,8 @@ async def api_chat(request: Request):
     message = (body.get("message") or "").strip()
     if not message:
         return {"reply": ""}
-    reply = expert_chat(u, message)
+    use_cosmetics = bool(body.get("use_cosmetics"))
+    reply = expert_chat(u, message, use_cosmetics=use_cosmetics)
     # сохраняем историю
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -350,12 +351,43 @@ def save_plan_and_tasks(user_id, plan):
         conn.commit()
 
 
-def expert_chat(u, message):
+def get_user_cosmetic_names(user_id):
+    """Список названий косметики пользователя (без состава)."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT product_name FROM user_cosmetics "
+                    "WHERE user_id = %s AND product_name IS NOT NULL ORDER BY product_name",
+                    (user_id,)
+                )
+                return [r["product_name"] for r in cur.fetchall() if r["product_name"]]
+    except Exception as e:
+        print(f"get_user_cosmetic_names error: {e}")
+        return []
+
+
+def expert_chat(u, message, use_cosmetics=False):
     profile = _profile_text(u)
     system = (
         "Ты — личный эксперт по волосам. Отвечай честно, по делу, тёплым тоном, "
         "без лести. Только про волосы и связанное здоровье. Профиль пользователя:\n" + profile
     )
+    if use_cosmetics:
+        names = get_user_cosmetic_names(u.get("user_id"))
+        if names:
+            system += (
+                "\n\nСредства, которые есть у пользователя (только названия — "
+                "сам определи их назначение и как применять):\n"
+                + "\n".join(f"· {n}" for n in names)
+                + "\n\nКогда уместно — советуй на основе ИМЕННО этих средств "
+                  "(чем помыть, чем уложить, в каком порядке). Если для задачи "
+                  "среди них чего-то не хватает — мягко скажи об этом."
+            )
+        else:
+            system += ("\n\nУ пользователя пока нет сохранённых средств. "
+                       "Если он спрашивает про свои средства — предложи отсканировать их "
+                       "в режиме «Сканер косметики».")
     try:
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",

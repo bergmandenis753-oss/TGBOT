@@ -57,6 +57,10 @@
   body.chat-mode { padding-bottom:0; overflow:hidden; }
   body.chat-mode header { display:none; }
   #tab-chat.active { display:flex; flex-direction:column; height:100dvh; padding:10px 18px 8px; }
+  .chat-head { display:flex; align-items:center; justify-content:space-between; }
+  .cos-toggle { width:38px; height:38px; border-radius:12px; border:none; cursor:pointer;
+                background:var(--soft); color:var(--muted); display:flex; align-items:center; justify-content:center; transition:.2s; }
+  .cos-toggle.on { background:linear-gradient(135deg,var(--accent2),var(--accent)); color:#fff; box-shadow:0 3px 10px rgba(162,115,214,.35); }
   .chat-input { display:flex; gap:8px; padding-top:8px; }
   .chat-input input { flex:1; border:none; border-radius:22px; padding:12px 16px; background:var(--card); color:var(--text); font-size:16px; outline:none; box-shadow:var(--shadow); }
   .chat-input button { border:none; border-radius:22px; padding:0 18px; background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; font-weight:500; cursor:pointer; font-size:16px; }
@@ -110,7 +114,12 @@
     <div id="cos-area"><div class="spinner">Загрузка…</div></div>
   </section>
   <section class="tab" id="tab-chat">
-    <button class="back" data-back>‹ Назад</button>
+    <div class="chat-head">
+      <button class="back" data-back>‹ Назад</button>
+      <button id="cosToggle" class="cos-toggle" title="Учитывать мои средства">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><rect x="9" y="2" width="6" height="3.5" rx="1.2" fill="currentColor"/><rect x="7.5" y="5.5" width="9" height="15" rx="3.5" fill="currentColor" opacity="0.85"/></svg>
+      </button>
+    </div>
     <div class="chat" id="chat-area"></div>
     <div class="chat-input" id="chat-input">
       <input id="chat-text" placeholder="Спросите эксперта…" autocomplete="off">
@@ -284,6 +293,21 @@ async function loadChat(){
     area.scrollTop=area.scrollHeight;
   }catch(e){}
 }
+let useCosmetics = false;
+try { useCosmetics = localStorage.getItem("useCosmetics")==="1"; } catch(e){}
+const cosBtn = document.getElementById("cosToggle");
+function renderCosToggle(){ cosBtn.classList.toggle("on", useCosmetics); }
+renderCosToggle();
+cosBtn.addEventListener("click", ()=>{
+  useCosmetics = !useCosmetics;
+  try{ localStorage.setItem("useCosmetics", useCosmetics?"1":"0"); }catch(e){}
+  renderCosToggle();
+  tg?.HapticFeedback?.impactOccurred?.("light");
+  const area=document.getElementById("chat-area");
+  area.innerHTML += `<div class="msg assistant">${useCosmetics?"Теперь учитываю вашу косметику в ответах ✦":"Больше не учитываю вашу косметику."}</div>`;
+  area.scrollTop=area.scrollHeight;
+});
+
 document.getElementById("chat-send").addEventListener("click", sendChat);
 document.getElementById("chat-text").addEventListener("keydown", e=>{ if(e.key==="Enter") sendChat(); });
 document.getElementById("chat-text").addEventListener("focus", ()=>{ setTimeout(()=>{ const a=document.getElementById("chat-area"); a.scrollTop=a.scrollHeight; }, 300); });
@@ -292,7 +316,7 @@ async function sendChat(){
   const area=document.getElementById("chat-area");
   area.innerHTML+=`<div class="msg user">${esc(text)}</div>`; input.value=""; area.scrollTop=area.scrollHeight;
   const wait=document.createElement("div"); wait.className="msg assistant"; wait.textContent="…"; area.appendChild(wait); area.scrollTop=area.scrollHeight;
-  try{ const d=await api("/api/chat",{message:text}); wait.textContent=d.reply||"—"; }catch(e){ wait.textContent="Не удалось ответить."; }
+  try{ const d=await api("/api/chat",{message:text, use_cosmetics:useCosmetics}); wait.textContent=d.reply||"—"; }catch(e){ wait.textContent="Не удалось ответить."; }
   area.scrollTop=area.scrollHeight;
 }
 
