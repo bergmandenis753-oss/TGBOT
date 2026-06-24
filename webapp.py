@@ -356,12 +356,17 @@ async def health():
     return {"ok": True}
 
 
-@app.on_event("startup")
-def startup():
+def _init_db_bg():
     for _ in range(10):
         try:
             init_webapp_db()
-            break
+            return
         except Exception as e:
             print(f"Webapp DB init failed: {e}")
             time.sleep(5)
+
+
+@app.on_event("startup")
+def startup():
+    import threading
+    threading.Thread(target=_init_db_bg, daemon=True).start()

@@ -1425,4 +1425,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    port = os.getenv("PORT")
+    if port:
+        # Web-сервис Railway: uvicorn в главном потоке (чтобы порт отвечал на healthcheck),
+        # бот (long-polling) — в фоновом демон-потоке.
+        import threading
+        threading.Thread(target=main, daemon=True).start()
+        print("Bot started in background thread")
+        import uvicorn
+        from webapp import app as webapp_app
+        uvicorn.run(webapp_app, host="0.0.0.0", port=int(port), log_level="warning")
+    else:
+        # Без PORT — обычный режим только бота
+        main()
