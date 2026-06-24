@@ -72,6 +72,9 @@
   .tile .tico { width:64px; height:64px; border-radius:18px; background:var(--soft); display:flex; align-items:center; justify-content:center; }
   .tile .tico svg { width:42px; height:42px; }
   .back { background:none; border:none; color:var(--accent); font-size:15px; font-weight:500; cursor:pointer; padding:4px 2px 10px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { border:none; border-radius:20px; padding:9px 14px; font-size:13px; cursor:pointer; background:var(--card); color:var(--text); box-shadow:var(--shadow); transition:.15s; }
+  .chip.on { background:linear-gradient(135deg,var(--accent2),var(--accent)); color:#fff; }
   .lock { text-align:center; padding:50px 22px; color:var(--hint); line-height:1.6; }
   .lock .big { width:72px; height:72px; margin:0 auto 14px; }
   .spinner { text-align:center; color:var(--muted); padding:34px; font-size:14px; }
@@ -185,26 +188,58 @@ async function loadTasks(){
   }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
 }
 
+const PLAN_BLOCKS=[["care","💧 Уход и мытьё"],["nutrition","🥗 Питание"],["supplements","💊 БАДы и витамины"],["masks","🧴 Маски и средства"],["styling","✂️ Стайлинг"]];
+const PLAN_TERMS=[["change","Что изменить"],["week","На неделю"],["month","На месяц"]];
+
 async function loadPlan(){
   const area=document.getElementById("plan-area");
   if(!isPremium){ area.innerHTML=lockHtml(); return; }
   try{
     const d=await api("/api/plan");
     if(!d.plan||!d.plan.days||!d.plan.days.length){
-      area.innerHTML='<div class="empty">Плана ещё нет.</div><button class="btn" id="gen">Составить план на неделю</button>';
+      area.innerHTML='<div class="empty">Плана ещё нет.</div><button class="btn" id="gen">Составить план</button>';
     } else {
       let html="";
       d.plan.days.forEach((day,i)=>{ html+=`<div class="day-title">${esc(day.day||("День "+(i+1)))}</div>`;
         (day.tasks||[]).forEach(t=>{ html+=`<div class="card"><div class="t" style="font-size:14px;color:var(--text)">${esc(t)}</div></div>`; }); });
       html+='<button class="btn secondary" id="gen">Составить заново</button>'; area.innerHTML=html;
     }
-    const g=document.getElementById("gen"); if(g) g.addEventListener("click", genPlan);
+    const g=document.getElementById("gen"); if(g) g.addEventListener("click", planSetup);
   }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
 }
+
+function planSetup(){
+  const area=document.getElementById("plan-area");
+  let chips=PLAN_BLOCKS.map(([k,l])=>`<button class="chip on" data-b="${k}">${l}</button>`).join("");
+  let terms=PLAN_TERMS.map(([k,l],i)=>`<button class="chip ${k==='week'?'on':''}" data-term="${k}">${l}</button>`).join("");
+  area.innerHTML=`
+    <div class="day-title">Что включить в план</div>
+    <div class="chips" id="planBlocks">${chips}</div>
+    <div class="day-title" style="margin-top:14px;">Срок</div>
+    <div class="chips" id="planTerms">${terms}</div>
+    <div class="day-title" style="margin-top:14px;">Пожелание (необязательно)</div>
+    <textarea id="planWish" placeholder="Чего хотите добиться? Что важно?" style="width:100%;border:none;border-radius:14px;padding:12px 14px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);min-height:60px;resize:none;"></textarea>
+    <button class="btn" id="planGo" style="margin-top:14px;">Составить план</button>
+    <button class="btn secondary" id="planCancel" style="margin-top:8px;">Отмена</button>`;
+  // мультивыбор блоков
+  area.querySelectorAll('#planBlocks .chip').forEach(c=>c.addEventListener('click',()=>c.classList.toggle('on')));
+  // один срок
+  area.querySelectorAll('#planTerms .chip').forEach(c=>c.addEventListener('click',()=>{
+    area.querySelectorAll('#planTerms .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on');
+  }));
+  document.getElementById("planCancel").addEventListener("click", loadPlan);
+  document.getElementById("planGo").addEventListener("click", genPlan);
+}
+
 async function genPlan(){
   const area=document.getElementById("plan-area");
+  const blocks=[...area.querySelectorAll('#planBlocks .chip.on')].map(c=>c.dataset.b);
+  const termEl=area.querySelector('#planTerms .chip.on');
+  const term=termEl?termEl.dataset.term:"week";
+  const wish=(document.getElementById("planWish")?.value||"").trim();
+  if(!blocks.length){ tg?.showAlert?.("Выберите хотя бы одну тему"); return; }
   area.innerHTML='<div class="spinner">Составляю план… несколько секунд</div>';
-  try{ await api("/api/plan_generate"); loadPlan(); loadTasks(); }
+  try{ await api("/api/plan_generate",{blocks, term, wish, use_cosmetics:useCosmetics}); loadPlan(); loadTasks(); }
   catch(e){ area.innerHTML='<div class="empty">Не удалось составить план.</div>'; }
 }
 

@@ -245,7 +245,11 @@ async def api_plan_generate(request: Request):
     u = fetch_user(user_id)
     if not subscription_active(u):
         raise HTTPException(status_code=403, detail="Premium only")
-    plan = generate_week_plan(u)
+    blocks = body.get("blocks") or []
+    term = body.get("term") or "week"
+    wish = (body.get("wish") or "").strip()
+    use_cosmetics = bool(body.get("use_cosmetics"))
+    plan = generate_week_plan(u, blocks=blocks, term=term, wish=wish, use_cosmetics=use_cosmetics)
     save_plan_and_tasks(user_id, plan)
     return {"plan": plan}
 
@@ -301,17 +305,47 @@ def _profile_text(u):
     return "\n".join(parts)
 
 
-def generate_week_plan(u):
-    """Возвращает структуру плана: список из 7 дней, в каждом — задания."""
-    profile = _profile_text(u)
-    prompt = f"""Ты — эксперт по волосам. На основе профиля составь план ухода на 7 дней.
-Профиль:
-{profile}
+BLOCK_LABELS = {
+    "care": "уход и мытьё",
+    "nutrition": "питание (что есть для волос)",
+    "supplements": "БАДы и витамины",
+    "masks": "маски и средства",
+    "styling": "стайлинг и укладка",
+}
 
-Верни СТРОГО JSON без пояснений в формате:
-{{"days": [{{"day": "День 1", "tasks": ["задание 1", "задание 2"]}}, ... 7 дней ...]}}
-Задания короткие, конкретные и выполнимые (например: «Утром помыть голову мягким шампунем»,
-«Нанести масло на кончики», «Выпить порцию белка»). По 2–4 задания в день. Только про волосы и связанное здоровье/питание."""
+
+def generate_week_plan(u, blocks=None, term="week", wish="", use_cosmetics=False):
+    """Возвращает структуру плана. blocks — какие темы включить; term — week/month/day/change."""
+    profile = _profile_text(u)
+    blocks = blocks or list(BLOCK_LABELS.keys())
+    chosen = [BLOCK_LABELS[b] for b in blocks if b in BLOCK_LABELS] or list(BLOCK_LABELS.values())
+
+    cos_block = ""
+    if use_cosmetics:
+        names = get_user_cosmetic_names(u.get("user_id"))
+        if names:
+            cos_block = "\nСредства пользователя (используй их в плане): " + ", ".join(names) + "\n"
+
+    wish_block = f"\nПожелание пользователя (учти обязательно): {wish}\n" if wish else ""
+
+    if term == "day":
+        structure = ('Верни СТРОГО JSON: {"days":[{"day":"Сегодня","tasks":["...", "..."]}]}. '
+                     'Один день, 3–6 коротких конкретных заданий.')
+    elif term == "month":
+        structure = ('Верни СТРОГО JSON: {"days":[{"day":"Неделя 1","tasks":["..."]}, ... 4 недели ...]}. '
+                     'По неделям, 3–5 заданий в неделе.')
+    elif term == "change":
+        structure = ('Верни СТРОГО JSON: {"days":[{"day":"Что изменить","tasks":["...", "..."]}]}. '
+                     'Без привязки к дням — 4–7 ключевых перемен/действий, с которых начать.')
+    else:  # week
+        structure = ('Верни СТРОГО JSON: {"days":[{"day":"День 1","tasks":["..."]}, ... 7 дней ...]}. '
+                     'По 2–4 задания в день.')
+
+    prompt = f"""Ты — эксперт по волосам. Составь персональный план только по выбранным темам: {", ".join(chosen)}.
+Профиль:
+{profile}{cos_block}{wish_block}
+{structure}
+Задания короткие, конкретные, выполнимые. Только про волосы и связанное здоровье/питание. Без пояснений вне JSON."""
     try:
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",
