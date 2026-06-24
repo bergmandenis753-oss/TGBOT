@@ -175,6 +175,14 @@ def init_db():
                     usage TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS ideas (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    username TEXT,
+                    first_name TEXT,
+                    text TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS summary TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS ingredients TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS usage TEXT;
@@ -341,6 +349,36 @@ def get_user_cosmetics(user_id):
     except Exception as e:
         print(f"DB get cosmetics error: {e}")
         return []
+
+
+def save_idea(user_id, username, first_name, text):
+    """Сохраняет идею пользователя."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ideas (user_id, username, first_name, text) VALUES (%s, %s, %s, %s)",
+                    (user_id, username, first_name, text)
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"DB save idea error: {e}")
+
+
+def notify_admin(text):
+    """Отправляет сообщение администратору через админ-бота (если настроен)."""
+    admin_token = os.getenv("ADMIN_BOT_TOKEN")
+    admin_id = os.getenv("ADMIN_USER_ID")
+    if not admin_token or not admin_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{admin_token}/sendMessage",
+            json={"chat_id": int(admin_id), "text": text},
+            verify=VERIFY, timeout=15
+        )
+    except Exception as e:
+        print(f"notify_admin error: {e}")
 
 
 # ─── Подписка и лимиты ─────────────────────────────────────
@@ -697,7 +735,8 @@ def handle_start(msg):
         "· /start — вернуться к выбору режима\n"
         "· /stats — ваш профиль\n"
         "· /cosmetics — ваша база отсканированной косметики\n"
-        "· /app — приложение с планом и чатом (Премиум)"
+        "· /app — приложение с планом и чатом (Премиум)\n"
+        "· /idea — предложить идею разработчику"
     )
 
     # Создаём пользователя при необходимости и сбрасываем состояние
@@ -1045,6 +1084,37 @@ def handle_app(msg):
             {"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}
         ]]}
     )
+
+
+def handle_idea(msg):
+    """Команда /idea — пользователь предлагает идею."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg.get("from", {}).get("id")
+    user = get_user(user_id,
+                    username=msg.get("from", {}).get("username", ""),
+                    first_name=msg.get("from", {}).get("first_name", ""))
+    update_user(user_id, awaiting="idea")
+    send_message(chat_id,
+        "💡 Напишите вашу идею или пожелание одним сообщением — "
+        "я передам её разработчику."
+    )
+
+
+def save_and_forward_idea(msg, user):
+    """Сохраняет идею и пересылает администратору."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    text = msg.get("text", "").strip()
+    username = msg["from"].get("username", "")
+    first_name = msg["from"].get("first_name", "")
+    update_user(user_id, awaiting="none")
+    if not text:
+        send_message(chat_id, "◦ Пустое сообщение. Попробуйте ещё раз: /idea")
+        return
+    save_idea(user_id, username, first_name, text)
+    handle = f"@{username}" if username else "—"
+    notify_admin(f"💡 Новая идея\n\nОт: {first_name or '—'} ({handle}), id {user_id}\n\n{text}")
+    send_message(chat_id, "✦ Спасибо! Ваша идея отправлена разработчику.")
 
 
 def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
@@ -1468,12 +1538,17 @@ def main():
                     handle_cosmetics(msg)
                 elif command == "/app":
                     handle_app(msg)
+                elif command == "/idea":
+                    handle_idea(msg)
                 elif msg.get("photo"):
                     handle_photo(msg)
                 elif msg.get("text"):
                     user = get_user(user_id)
+                    # Ждём текст идеи — приоритет над остальным
+                    if user.get("awaiting") == "idea":
+                        save_and_forward_idea(msg, user)
                     # Режим не выбран — показываем развилку
-                    if not user.get("mode"):
+                    elif not user.get("mode"):
                         send_mode_picker(chat_id)
                     # Режим «Сканер» — ждём фото косметики
                     elif user.get("mode") == "scanner":

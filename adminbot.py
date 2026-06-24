@@ -137,6 +137,23 @@ def revoke(target_id):
     return updated
 
 
+def cmd_ideas(chat_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username, first_name, text, created_at FROM ideas "
+                        "ORDER BY created_at DESC LIMIT 30")
+            rows = cur.fetchall()
+    if not rows:
+        send(chat_id, "Идей пока нет.")
+        return
+    lines = [f"💡 Идеи: {len(rows)}", ""]
+    for r in rows:
+        handle = f"@{r['username']}" if r.get("username") else "—"
+        when = r["created_at"].strftime("%d.%m %H:%M") if r.get("created_at") else ""
+        lines.append(f"• {r.get('first_name') or '—'} ({handle}) · {when}\n  {r.get('text') or ''}")
+    send(chat_id, "\n".join(lines))
+
+
 def cmd_stats(chat_id):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -201,9 +218,12 @@ def handle_update(update):
              "/user <id> — карточка пользователя\n"
              "/grant <id> — выдать Премиум на 30 дней\n"
              "/revoke <id> — снять Премиум\n"
+             "/ideas — идеи от пользователей\n"
              "/stats — общая статистика")
     elif cmd == "/users":
         cmd_users(chat_id)
+    elif cmd == "/ideas":
+        cmd_ideas(chat_id)
     elif cmd == "/stats":
         cmd_stats(chat_id)
     elif cmd == "/user" and arg:
