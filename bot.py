@@ -1033,6 +1033,25 @@ def handle_app(msg):
     )
 
 
+def handle_restart(msg):
+    """Команда /restart — сброс профиля и квиза (косметика и подписка не трогаются)."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg.get("from", {}).get("id")
+    get_user(user_id,
+             username=msg.get("from", {}).get("username", ""),
+             first_name=msg.get("from", {}).get("first_name", ""))
+    # Обнуляем профиль и состояние
+    update_user(
+        user_id,
+        quiz_step=0, quiz_done=False, awaiting="none", mode=None,
+        goal=None, problem=None, age=None, gender=None,
+        country=None, city=None, wash_frequency=None, styling_time=None,
+        hair_analysis=None, final_report=None,
+    )
+    send_message(chat_id, "♻️ Профиль сброшен. Начинаем заново.")
+    handle_start(msg)
+
+
 def handle_idea(msg):
     """Команда /idea — пользователь предлагает идею."""
     chat_id = msg["chat"]["id"]
@@ -1490,6 +1509,8 @@ def main():
 
                 if command == "/start":
                     handle_start(msg)
+                elif command == "/restart":
+                    handle_restart(msg)
                 elif command in ("/stats", "/stas", "/profile"):
                     handle_stats(msg)
                 elif command in ("/cosmetics", "/cosmetic"):
