@@ -148,9 +148,15 @@ def init_db():
                     image_hash TEXT UNIQUE,
                     product_name TEXT,
                     analysis TEXT,
+                    summary TEXT,
+                    ingredients TEXT,
+                    usage TEXT,
                     scan_count INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS summary TEXT;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS ingredients TEXT;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS usage TEXT;
                 CREATE TABLE IF NOT EXISTS user_products (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT,
@@ -249,14 +255,15 @@ def get_cached_analysis(image_hash):
         return None
 
 
-def save_analysis(image_hash, product_name, analysis):
+def save_analysis(image_hash, product_name, analysis, summary="", ingredients="", usage=""):
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO products (image_hash, product_name, analysis) VALUES (%s, %s, %s) "
+                    "INSERT INTO products (image_hash, product_name, analysis, summary, ingredients, usage) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (image_hash) DO NOTHING RETURNING id",
-                    (image_hash, product_name, analysis)
+                    (image_hash, product_name, analysis, summary, ingredients, usage)
                 )
                 row = cur.fetchone()
                 conn.commit()
@@ -1085,7 +1092,8 @@ def process_product_photo(chat_id, user, image_bytes):
         else:
             analysis = analyze_image(image_bytes, user=user)
             parsed0 = parse_cosmetic_analysis(analysis)
-            product_id = save_analysis(image_hash, parsed0["name"], analysis)
+            product_id = save_analysis(image_hash, parsed0["name"], analysis,
+                                       summary=parsed0["summary"], ingredients=parsed0["ingredients"], usage=parsed0["usage"])
         consume_ai_action(user_id, way, "product")
 
         parsed = parse_cosmetic_analysis(analysis)
@@ -1162,7 +1170,8 @@ def process_scanner_photo(chat_id, user, image_bytes):
         parsed = parse_cosmetic_analysis(analysis)
         product_name = parsed["name"]
         if not cached:
-            save_analysis(image_hash, product_name, analysis)
+            save_analysis(image_hash, product_name, analysis,
+                          summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"])
 
         # Сохраняем в личную базу косметики (с разбивкой) и получаем id записи
         cos_id = save_user_cosmetic(

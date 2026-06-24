@@ -158,6 +158,33 @@ async def api_cosmetics(request: Request):
     return {"items": items}
 
 
+@app.post("/api/cosmetics_all")
+async def api_cosmetics_all(request: Request):
+    """Общая база косметики (все пользователи). Только для Pro и только новые записи с разбивкой."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    u = fetch_user(user_id)
+    if not subscription_active(u):
+        raise HTTPException(status_code=403, detail="Premium only")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, product_name, summary, ingredients, usage FROM products "
+                "WHERE summary IS NOT NULL AND summary <> '' "
+                "ORDER BY scan_count DESC, created_at DESC LIMIT 200"
+            )
+            rows = cur.fetchall()
+    items = [{
+        "id": r["id"],
+        "name": r["product_name"] or "Косметика",
+        "summary": r.get("summary") or "",
+        "ingredients": r.get("ingredients") or "",
+        "usage": r.get("usage") or "",
+        "analysis": "",
+    } for r in rows]
+    return {"items": items}
+
+
 @app.post("/api/tasks")
 async def api_tasks(request: Request):
     body = await request.json()

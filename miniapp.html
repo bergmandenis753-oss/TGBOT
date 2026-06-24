@@ -170,18 +170,37 @@ async function genPlan(){
 }
 
 let COS_ITEMS=[];
-async function loadCosmetics(){
+let COS_SOURCE="mine";
+function cosShell(){
   const area=document.getElementById("cos-area");
+  const seg=isPremium?(
+    '<div style="display:flex;gap:6px;background:var(--soft);border-radius:12px;padding:4px;margin-bottom:12px;">'
+    +'<button id="cos-mine" style="flex:1;border:none;border-radius:9px;padding:9px;font-size:13px;font-weight:500;cursor:pointer;background:'+(COS_SOURCE==="mine"?"#fff":"transparent")+';color:'+(COS_SOURCE==="mine"?"var(--accent)":"var(--muted)")+';box-shadow:'+(COS_SOURCE==="mine"?"var(--shadow)":"none")+';">Моя</button>'
+    +'<button id="cos-all" style="flex:1;border:none;border-radius:9px;padding:9px;font-size:13px;font-weight:500;cursor:pointer;background:'+(COS_SOURCE==="all"?"#fff":"transparent")+';color:'+(COS_SOURCE==="all"?"var(--accent)":"var(--muted)")+';box-shadow:'+(COS_SOURCE==="all"?"var(--shadow)":"none")+';">Общая</button>'
+    +'</div>'):'';
+  area.innerHTML=seg
+    +'<input id="cos-search" placeholder="Поиск по названию…" autocomplete="off" style="width:100%;border:none;border-radius:14px;padding:12px 16px;margin-bottom:12px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);">'
+    +'<div id="cos-list"><div class="spinner">Загрузка…</div></div>';
+  const s=document.getElementById("cos-search");
+  if(s) s.addEventListener("input",e=>renderCosList(e.target.value));
+  if(isPremium){
+    document.getElementById("cos-mine").addEventListener("click",()=>{ if(COS_SOURCE!=="mine"){COS_SOURCE="mine"; loadCosmetics();}});
+    document.getElementById("cos-all").addEventListener("click",()=>{ if(COS_SOURCE!=="all"){COS_SOURCE="all"; loadCosmetics();}});
+  }
+}
+async function loadCosmetics(){
+  cosShell();
+  const list=document.getElementById("cos-list");
   try{
-    const d=await api("/api/cosmetics");
+    const ep=COS_SOURCE==="all"?"/api/cosmetics_all":"/api/cosmetics";
+    const d=await api(ep);
     COS_ITEMS=d.items||[];
-    if(!COS_ITEMS.length){ area.innerHTML='<div class="empty">Вы ещё не сканировали косметику.<br>Отправьте фото средства боту.</div>'; return; }
-    area.innerHTML='<input id="cos-search" placeholder="Поиск по названию…" autocomplete="off"'
-      +' style="width:100%;border:none;border-radius:14px;padding:12px 16px;margin-bottom:12px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);">'
-      +'<div id="cos-list"></div>';
-    document.getElementById("cos-search").addEventListener("input",e=>renderCosList(e.target.value));
-    renderCosList("");
-  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+    if(!COS_ITEMS.length){
+      list.innerHTML='<div class="empty">'+(COS_SOURCE==="all"?"В общей базе пока пусто.":"Вы ещё не сканировали косметику.<br>Отправьте фото средства боту.")+'</div>';
+      return;
+    }
+    renderCosList(document.getElementById("cos-search").value||"");
+  }catch(e){ list.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
 }
 function renderCosList(q){
   const list=document.getElementById("cos-list"); if(!list) return;
