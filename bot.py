@@ -547,17 +547,16 @@ def build_profile_text(user, include_hair=False, include_products=False):
     return profile
 
 
-def build_analysis_prompt(user):
-    # Компактный промт: один вызов даёт 3 секции через разделители (экономия токенов).
-    profile = build_profile_text(user)
-    profile_block = f"\nПрофиль: {profile.strip()}\n" if profile else ""
-    return f"""Ты — эксперт по косметике для волос. Анализируй фото средства честно и по делу.{profile_block}
+def build_analysis_prompt(user=None):
+    # Общий разбор средства (без привязки к профилю — кэшируется и переиспользуется всеми).
+    return """Ты — эксперт по косметике для волос. Анализируй фото средства честно и по делу.
+Это ОБЩИЙ разбор средства, не подстраивай его под конкретного человека.
 Ответь СТРОГО в таком формате, ровно с этими разделителями, без лишнего текста, без эмодзи кроме · — :
 
 ===NAME===
 Официальное название продукта в формате «Бренд Линейка» — строго как на упаковке, без рекламных слов и описаний аромата/объёма. Например: «Aveda Nutri-Plenish Leave-In Conditioner». Одна строка.
 ===SUMMARY===
-Оценка X/10 и 2–3 строки сути: для каких волос, главный плюс и минус. С учётом профиля.
+Оценка X/10 и 2–3 строки сути: для какого типа волос, главный плюс и минус.
 ===INGREDIENTS===
 5–7 ключевых компонентов, каждый с новой строки: — Компонент: зачем, польза или осторожность
 ===USAGE===
@@ -605,6 +604,76 @@ def analyze_image(image_bytes, user=None):
         verify=VERIFY
     )
     return resp.json()["choices"][0]["message"]["content"]
+
+
+def analyze_cosmetic(image_bytes):
+    """Анализ средства с общим кэшем по названию (экономия токенов).
+    1) дешёвый запрос — только имя; 2) если есть в общей базе — берём готовый разбор;
+    3) иначе — полный разбор 1 раз и сохраняем в общую базу."""
+    name = detect_product_name(image_bytes)
+    cached = find_cached_by_name(name)
+    if cached:
+        return {
+            "name": cached["product_name"] or name,
+            "summary": cached.get("summary") or "",
+            "ingredients": cached.get("ingredients") or "",
+            "usage": cached.get("usage") or "",
+            "analysis": cached.get("analysis") or "",
+        }
+    analysis = analyze_image(image_bytes)
+    parsed = parse_cosmetic_analysis(analysis)
+    parsed["analysis"] = analysis
+    image_hash = hashlib.md5(image_bytes).hexdigest()
+    save_analysis(image_hash, parsed["name"], analysis,
+                  summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"])
+    return parsed
+
+
+def detect_product_name(image_bytes):
+    """Дешёвый запрос: только официальное название средства по фото (мало токенов)."""
+    image_b64 = base64.standard_b64encode(image_bytes).decode()
+    prompt = (
+        "На фото косметическое средство. Ответь ТОЛЬКО его официальным названием "
+        "в формате «Бренд Линейка», строго как на упаковке, без рекламных слов, "
+        "аромата и объёма. Если бренд не виден — опиши тип средства кратко. Одна строка, без кавычек."
+    )
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 30,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}", "detail": "low"}},
+                    {"type": "text", "text": prompt}
+                ]}]
+            },
+            verify=VERIFY
+        )
+        return resp.json()["choices"][0]["message"]["content"].strip().strip('"')[:120]
+    except Exception as e:
+        print(f"detect_product_name error: {e}")
+        return "Косметика"
+
+
+def find_cached_by_name(product_name):
+    """Ищет готовый разбор в общей базе products по нормализованному имени.
+    Возвращает dict с product_name/analysis/summary/ingredients/usage или None."""
+    norm = normalize_name(product_name)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT product_name, analysis, summary, ingredients, usage FROM products "
+                    "WHERE summary IS NOT NULL AND summary <> '' ORDER BY created_at, id"
+                )
+                for r in cur.fetchall():
+                    if normalize_name(r["product_name"]) == norm:
+                        return r
+    except Exception as e:
+        print(f"find_cached_by_name error: {e}")
+    return None
 
 
 def classify_photo(image_bytes):
@@ -1168,26 +1237,15 @@ def process_product_photo(chat_id, user, image_bytes):
     send_message(chat_id,
         "✦ Анализирую средство...\n\n"
         "◦ Изучаю состав\n"
-        "◦ Сверяю с вашим профилем\n"
         "◦ Готовлю отчёт"
     )
     try:
-        image_hash = hashlib.md5(image_bytes).hexdigest()
-        cached = get_cached_analysis(image_hash)
-        if cached:
-            analysis = cached["analysis"]
-            product_id = cached["id"]
-        else:
-            analysis = analyze_image(image_bytes, user=user)
-            parsed0 = parse_cosmetic_analysis(analysis)
-            product_id = save_analysis(image_hash, parsed0["name"], analysis,
-                                       summary=parsed0["summary"], ingredients=parsed0["ingredients"], usage=parsed0["usage"])
+        parsed = analyze_cosmetic(image_bytes)
         consume_ai_action(user_id, way, "product")
 
-        parsed = parse_cosmetic_analysis(analysis)
         # Сохраняем в личную базу косметики
         cos_id = save_user_cosmetic(
-            user_id, parsed["name"], analysis,
+            user_id, parsed["name"], parsed.get("analysis", ""),
             summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"]
         )
 
@@ -1199,14 +1257,6 @@ def process_product_photo(chat_id, user, image_bytes):
             detail_row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
         kb = [detail_row] if detail_row else []
         send_message(chat_id, head, reply_markup={"inline_keyboard": kb} if kb else None)
-
-        if product_id:
-            send_message(chat_id, "Вы пользуетесь этим средством?",
-                reply_markup={"inline_keyboard": [[
-                    {"text": "Да, использую", "callback_data": f"uses_yes_{product_id}"},
-                    {"text": "Нет, присматриваюсь", "callback_data": f"uses_no_{product_id}"}
-                ]]}
-            )
     except Exception as e:
         print(f"Error analyzing product: {e}")
         send_message(chat_id,
@@ -1248,22 +1298,12 @@ def process_scanner_photo(chat_id, user, image_bytes):
         "◦ Готовлю отчёт"
     )
     try:
-        image_hash = hashlib.md5(image_bytes).hexdigest()
-        cached = get_cached_analysis(image_hash)
-        if cached:
-            analysis = cached["analysis"]
-        else:
-            analysis = analyze_image(image_bytes, user=user)
-
-        parsed = parse_cosmetic_analysis(analysis)
+        parsed = analyze_cosmetic(image_bytes)
         product_name = parsed["name"]
-        if not cached:
-            save_analysis(image_hash, product_name, analysis,
-                          summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"])
 
         # Сохраняем в личную базу косметики (с разбивкой) и получаем id записи
         cos_id = save_user_cosmetic(
-            user_id, product_name, analysis,
+            user_id, product_name, parsed.get("analysis", ""),
             summary=parsed["summary"], ingredients=parsed["ingredients"], usage=parsed["usage"]
         )
 
