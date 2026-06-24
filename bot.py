@@ -289,9 +289,26 @@ def normalize_name(name):
     return " ".join(sorted(words))
 
 
-def save_user_cosmetic(user_id, product_name, analysis, summary="", ingredients="", usage=""):
-    """Сохраняет скан косметики в личную базу. Дубли (по нормализованному имени) не создаёт — обновляет."""
+def canonical_product_name(product_name):
+    """Сверяет имя с общей базой products: если есть похожее (по норме) — возвращает каноничное имя оттуда."""
+    norm = normalize_name(product_name)
     try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT product_name FROM products WHERE product_name IS NOT NULL ORDER BY created_at, id")
+                for r in cur.fetchall():
+                    if r["product_name"] and normalize_name(r["product_name"]) == norm:
+                        return r["product_name"]
+    except Exception as e:
+        print(f"canonical_product_name error: {e}")
+    return product_name
+
+
+def save_user_cosmetic(user_id, product_name, analysis, summary="", ingredients="", usage=""):
+    """Сохраняет скан косметики в личную базу. Имя приводится к каноничному (из общей базы),
+    дубли (по нормализованному имени) не создаёт — обновляет."""
+    try:
+        product_name = canonical_product_name(product_name)
         norm = normalize_name(product_name)
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -299,8 +316,8 @@ def save_user_cosmetic(user_id, product_name, analysis, summary="", ingredients=
                 for r in cur.fetchall():
                     if normalize_name(r["product_name"]) == norm:
                         cur.execute(
-                            "UPDATE user_cosmetics SET analysis=%s, summary=%s, ingredients=%s, usage=%s WHERE id=%s",
-                            (analysis, summary, ingredients, usage, r["id"])
+                            "UPDATE user_cosmetics SET product_name=%s, analysis=%s, summary=%s, ingredients=%s, usage=%s WHERE id=%s",
+                            (product_name, analysis, summary, ingredients, usage, r["id"])
                         )
                         conn.commit()
                         return r["id"]
@@ -538,7 +555,7 @@ def build_analysis_prompt(user):
 Ответь СТРОГО в таком формате, ровно с этими разделителями, без лишнего текста, без эмодзи кроме · — :
 
 ===NAME===
-Название и бренд одной строкой
+Официальное название продукта в формате «Бренд Линейка» — строго как на упаковке, без рекламных слов и описаний аромата/объёма. Например: «Aveda Nutri-Plenish Leave-In Conditioner». Одна строка.
 ===SUMMARY===
 Оценка X/10 и 2–3 строки сути: для каких волос, главный плюс и минус. С учётом профиля.
 ===INGREDIENTS===
