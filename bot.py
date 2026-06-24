@@ -1498,17 +1498,32 @@ def main():
             time.sleep(3)
 
 
+def start_admin_bot_bg():
+    """Запускает админ-бота в фоне, если задан ADMIN_BOT_TOKEN."""
+    if not os.getenv("ADMIN_BOT_TOKEN"):
+        return
+    try:
+        import threading
+        from adminbot import run_admin_bot
+        threading.Thread(target=run_admin_bot, daemon=True).start()
+        print("Admin bot launched in background")
+    except Exception as e:
+        print(f"Admin bot launch failed: {e}")
+
+
 if __name__ == "__main__":
     port = os.getenv("PORT")
     if port:
         # Web-сервис Railway: uvicorn в главном потоке (чтобы порт отвечал на healthcheck),
-        # бот (long-polling) — в фоновом демон-потоке.
+        # бот (long-polling) и админ-бот — в фоновых демон-потоках.
         import threading
         threading.Thread(target=main, daemon=True).start()
         print("Bot started in background thread")
+        start_admin_bot_bg()
         import uvicorn
         from webapp import app as webapp_app
         uvicorn.run(webapp_app, host="0.0.0.0", port=int(port), log_level="warning")
     else:
-        # Без PORT — обычный режим только бота
+        # Без PORT — бот + админ-бот
+        start_admin_bot_bg()
         main()
