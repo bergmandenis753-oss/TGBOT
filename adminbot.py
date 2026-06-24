@@ -15,9 +15,53 @@ from psycopg2.extras import RealDictCursor
 ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")  # строкой
 DATABASE_URL = os.getenv("DATABASE_URL")
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # основной бот — для уведомления пользователя
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 SUB_DAYS = 30
 
 API = f"https://api.telegram.org/bot{ADMIN_BOT_TOKEN}"
+
+
+def notify_user_premium(target_id):
+    """Шлёт пользователю поздравление о Премиуме через основной бот-токен."""
+    if not BOT_TOKEN:
+        return
+    text = (
+        "🎉 Поздравляем! Вам открыт Премиум-доступ ✦\n\n"
+        "Теперь вам доступно:\n"
+        "◦ Персональный план по волосам на неделю\n"
+        "◦ Чат с экспертом\n"
+        "◦ Безлимитный (в рамках месяца) анализ фото и косметики\n"
+        "◦ Общая база косметики в приложении\n\n"
+        "Откройте приложение командой /app — желаем красивых волос ✦"
+    )
+    markup = None
+    if WEBAPP_URL:
+        markup = {"inline_keyboard": [[{"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}]]}
+    try:
+        payload = {"chat_id": target_id, "text": text}
+        if markup:
+            payload["reply_markup"] = markup
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                      json=payload, verify=VERIFY, timeout=15)
+    except Exception as e:
+        print(f"notify_user_premium error: {e}")
+
+
+def resolve_target(arg):
+    """Принимает id или @username, возвращает user_id из базы или None."""
+    arg = arg.strip()
+    if arg.startswith("@"):
+        uname = arg[1:]
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM users WHERE lower(username) = lower(%s)", (uname,))
+                row = cur.fetchone()
+                return row["user_id"] if row else None
+    try:
+        return int(arg)
+    except ValueError:
+        return None
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -188,7 +232,11 @@ def handle_update(update):
         if data.startswith("agrant_"):
             tid = int(data.split("_")[1])
             n = grant(tid)
-            send(chat_id, "✓ Премиум выдан на 30 дней." if n else "Не найдено.")
+            if n:
+                notify_user_premium(tid)
+                send(chat_id, "✓ Премиум выдан на 30 дней. Пользователь уведомлён.")
+            else:
+                send(chat_id, "Не найдено.")
         elif data.startswith("arevoke_"):
             tid = int(data.split("_")[1])
             n = revoke(tid)
@@ -215,9 +263,9 @@ def handle_update(update):
         send(chat_id,
              "🔐 Админ-панель TGBOT\n\n"
              "/users — список пользователей и статусы\n"
-             "/user <id> — карточка пользователя\n"
-             "/grant <id> — выдать Премиум на 30 дней\n"
-             "/revoke <id> — снять Премиум\n"
+             "/user <id|@логин> — карточка пользователя\n"
+             "/grant <id|@логин> — выдать Премиум на 30 дней\n"
+             "/revoke <id|@логин> — снять Премиум\n"
              "/ideas — идеи от пользователей\n"
              "/stats — общая статистика")
     elif cmd == "/users":
@@ -226,23 +274,39 @@ def handle_update(update):
         cmd_ideas(chat_id)
     elif cmd == "/stats":
         cmd_stats(chat_id)
-    elif cmd == "/user" and arg:
-        try:
-            cmd_user(chat_id, int(arg))
-        except ValueError:
-            send(chat_id, "Использование: /user <id>")
-    elif cmd == "/grant" and arg:
-        try:
-            n = grant(int(arg))
-            send(chat_id, "✓ Премиум выдан на 30 дней." if n else "Пользователь не найден.")
-        except ValueError:
-            send(chat_id, "Использование: /grant <id>")
-    elif cmd == "/revoke" and arg:
-        try:
-            n = revoke(int(arg))
-            send(chat_id, "✓ Премиум снят." if n else "Пользователь не найден.")
-        except ValueError:
-            send(chat_id, "Использование: /revoke <id>")
+    elif cmd == "/user":
+        if not arg:
+            send(chat_id, "Использование: /user <id|@логин>")
+        else:
+            tid = resolve_target(arg)
+            if tid is None:
+                send(chat_id, "Пользователь не найден. Укажите id или @логин из /users.")
+            else:
+                cmd_user(chat_id, tid)
+    elif cmd == "/grant":
+        if not arg:
+            send(chat_id, "Использование: /grant <id|@логин>\nСписок — /users")
+        else:
+            tid = resolve_target(arg)
+            if tid is None:
+                send(chat_id, "Пользователь не найден. Укажите id или @логин из /users.")
+            else:
+                n = grant(tid)
+                if n:
+                    notify_user_premium(tid)
+                    send(chat_id, "✓ Премиум выдан на 30 дней. Пользователь уведомлён.")
+                else:
+                    send(chat_id, "Пользователь не найден.")
+    elif cmd == "/revoke":
+        if not arg:
+            send(chat_id, "Использование: /revoke <id|@логин>")
+        else:
+            tid = resolve_target(arg)
+            if tid is None:
+                send(chat_id, "Пользователь не найден. Укажите id или @логин из /users.")
+            else:
+                n = revoke(tid)
+                send(chat_id, "✓ Премиум снят." if n else "Пользователь не найден.")
     else:
         send(chat_id, "Неизвестная команда. /help — список команд.")
 
