@@ -198,6 +198,52 @@ def cmd_ideas(chat_id):
     send(chat_id, "\n".join(lines))
 
 
+def _norm_name(name):
+    """Нормализация названия для поиска дублей (как в bot.py)."""
+    import re
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"[^\wа-я0-9 ]", " ", s)
+    words = [w for w in s.split() if w not in ("от", "by", "из")]
+    return " ".join(sorted(words))
+
+
+def cmd_dedupe(chat_id):
+    """Чистит дубли в общей базе products: группирует по нормализованному имени,
+    оставляет одну запись (с самым коротким названием), остальные удаляет."""
+    removed = 0
+    groups = {}
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, product_name, summary FROM products ORDER BY id")
+            for r in cur.fetchall():
+                key = _norm_name(r["product_name"])
+                if not key:
+                    continue
+                groups.setdefault(key, []).append(r)
+            to_delete = []
+            kept_lines = []
+            for key, rows in groups.items():
+                if len(rows) < 2:
+                    continue
+                # оставляем запись с заполненным summary и самым коротким названием
+                rows_sorted = sorted(
+                    rows,
+                    key=lambda x: (0 if (x.get("summary") or "").strip() else 1, len(x["product_name"] or ""))
+                )
+                keep = rows_sorted[0]
+                kept_lines.append(f"✓ {keep['product_name']}")
+                for r in rows_sorted[1:]:
+                    to_delete.append(r["id"])
+            if to_delete:
+                cur.execute("DELETE FROM products WHERE id = ANY(%s)", (to_delete,))
+                removed = cur.rowcount
+                conn.commit()
+    if removed:
+        send(chat_id, f"🧹 Удалено дублей в общей базе: {removed}\n\nОставлены:\n" + "\n".join(kept_lines))
+    else:
+        send(chat_id, "Дублей в общей базе не найдено ✓")
+
+
 def cmd_stats(chat_id):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -267,13 +313,16 @@ def handle_update(update):
              "/grant <id|@логин> — выдать Премиум на 30 дней\n"
              "/revoke <id|@логин> — снять Премиум\n"
              "/ideas — идеи от пользователей\n"
-             "/stats — общая статистика")
+             "/stats — общая статистика\n"
+             "/dedupe — удалить дубли в общей базе косметики")
     elif cmd == "/users":
         cmd_users(chat_id)
     elif cmd == "/ideas":
         cmd_ideas(chat_id)
     elif cmd == "/stats":
         cmd_stats(chat_id)
+    elif cmd == "/dedupe":
+        cmd_dedupe(chat_id)
     elif cmd == "/user":
         if not arg:
             send(chat_id, "Использование: /user <id|@логин>")
