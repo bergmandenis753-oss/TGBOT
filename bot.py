@@ -31,77 +31,24 @@ VERIFY = False
 QUIZ_STEPS = [
     {
         "key": "goal",
-        "block": "🎯 Цель",
-        "question": (
-            "Что вы хотите изменить или улучшить в своих волосах?\n\n"
-            "Напишите своими словами — например:\n"
-            "· Быстрее отрастить волосы\n"
-            "· Сделать волосы гуще\n"
-            "· Избавиться от жирности\n"
-            "· Научиться пользоваться стайлерами"
-        ),
+        "question": "Чего хотите добиться с волосами?\n(например: отрастить, сделать гуще, убрать жирность)",
         "type": "text"
     },
     {
         "key": "problem",
-        "block": "🌿 Что беспокоит",
-        "question": (
-            "Что вас сейчас больше всего беспокоит в ваших волосах?\n\n"
-            "Напишите своими словами — например:\n"
-            "· Быстро становятся грязными\n"
-            "· Перхоть\n"
-            "· Выпадение\n"
-            "· Сухость и ломкость\n"
-            "· Не получается укладка"
-        ),
-        "type": "text"
-    },
-    {
-        "key": "age",
-        "block": "👤 Профиль",
-        "question": "Сколько вам лет?",
-        "type": "text"
-    },
-    {
-        "key": "gender",
-        "block": "👤 Профиль",
-        "question": "Ваш пол?",
-        "type": "buttons",
-        "options": ["Женский", "Мужской", "Предпочитаю не указывать"]
-    },
-    {
-        "key": "country",
-        "block": "🌍 Профиль",
-        "question": (
-            "В какой стране вы живёте?\n\n"
-            "Это нужно, чтобы учесть климат, жёсткость воды\n"
-            "и доступность средств в вашем регионе."
-        ),
-        "type": "text"
-    },
-    {
-        "key": "city",
-        "block": "🌍 Профиль",
-        "question": "В каком городе вы живёте?",
+        "question": "Что сейчас беспокоит больше всего?\n(например: выпадение, сухость, перхоть, укладка)",
         "type": "text"
     },
     {
         "key": "wash_frequency",
-        "block": "💧 Привычки",
-        "question": "Как часто вы моете голову?",
+        "question": "Как часто моете голову?",
         "type": "buttons",
-        "options": ["Каждый день", "Через день", "2–3 раза в неделю", "Реже"]
+        "options": ["Каждый день", "1–3 раза в неделю", "Реже"]
     },
     {
-        "key": "styling_time",
-        "block": "✨ Привычки",
-        "question": (
-            "Сколько времени обычно занимает ваша укладка?\n\n"
-            "Это помогает понять ваши привычки\n"
-            "и подобрать подходящие рекомендации."
-        ),
-        "type": "buttons",
-        "options": ["Не укладываю", "До 5 минут", "5–15 минут", "Более 15 минут"]
+        "key": "age",
+        "question": "Сколько вам лет?",
+        "type": "text"
     },
 ]
 
@@ -500,14 +447,8 @@ def send_quiz_question(chat_id, step_index):
     step = QUIZ_STEPS[step_index]
     total = len(QUIZ_STEPS)
     done = step_index + 1
-    # Элегантный прогресс: заполненные ромбы и тонкие разделители
-    progress = "◆ " * done + "◇ " * (total - done)
-
-    header = (
-        f"{step['block']}   ·   шаг {done} из {total}\n"
-        f"{progress.strip()}\n\n"
-    )
-    text = header + step["question"]
+    # Простой короткий заголовок
+    text = f"Вопрос {done}/{total}\n\n{step['question']}"
 
     if step["type"] == "buttons":
         keyboard = [[{"text": opt, "callback_data": f"quiz_{step['key']}_{i}"}]
@@ -673,47 +614,56 @@ def analyze_hair(image_bytes):
 
 
 def generate_final_report(user):
-    """Итоговый персональный разбор по всей базе пользователя."""
+    """Итоговый разбор: краткая суть + подробный план через разделители (1 вызов)."""
     profile = build_profile_text(user, include_hair=True, include_products=True)
-    prompt = f"""Ты — профессиональный консультант по волосам. Пиши честно, по делу и структурно, как эксперт, а не как продавец. Без комплиментов, без лести, без фраз вроде «у вас прекрасные стремления». Не оценивай человека — оценивай ситуацию с волосами и давай конкретику. Тон спокойный, уважительный, не приторный.
+    prompt = f"""Ты — консультант по волосам. Честно, по делу, без лести и воды. Не оценивай человека — оценивай ситуацию с волосами.
 
-Данные о человеке:
+Данные:
 {profile}
 
-Составь разбор и план под его цель. Опирайся строго на эти данные: профиль, привычки, состояние волос, используемые средства (если они есть — честно скажи, что оставить, а что заменить и почему). Только про волосы и связанное с ними здоровье. Не выдумывай факты, которых нет в данных. Давай конкретные действия и цифры, где уместно (частота, что искать в составе, какие нутриенты).
+Дай ответ СТРОГО в формате с разделителями, без лишнего текста, оформление только · — :
 
-Структура (оформление только символами ✦ — · ◦, без ✅ и ❌, без эмодзи):
-
-✦ СИТУАЦИЯ
-— 2–3 строки: что в данных указывает на текущее состояние и в чём суть задачи
-
-✦ ПРИЧИНЫ
-— Почему так происходит, на основе привычек и профиля
-
-✦ УХОД
-— Конкретные шаги: частота мытья, температура воды, техника
-
-✦ СРЕДСТВА
-— Что искать в составе и что использовать; с разбором уже используемых средств
-
-✦ ПИТАНИЕ И ЗДОРОВЬЕ
-— Конкретные нутриенты для волос: белок, омега-3, железо, цинк, витамины, коллаген — с примерами продуктов
-
-✦ ПЕРВЫЙ ШАГ
-— Один конкретный шаг на сегодня
-
-Будь честным и точным. Если данных мало для какого-то раздела — так и скажи, не придумывай."""
+===SHORT===
+Суть в 2–3 коротких строках: что происходит и главный совет. Просто и понятно.
+===STEP===
+Один конкретный шаг, с которого начать сегодня (одна строка).
+===FULL===
+Подробный план под цель, кратко по пунктам:
+Уход: частота мытья, вода, техника.
+Средства: что искать в составе, что заменить (учти используемые).
+Питание: ключевые нутриенты с примерами продуктов.
+Без выдумок. Если данных мало — скажи прямо.
+===END==="""
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json={
             "model": "gpt-4o-mini",
-            "max_tokens": 1500,
+            "max_tokens": 1100,
             "messages": [{"role": "user", "content": prompt}]
         },
         verify=VERIFY
     )
     return resp.json()["choices"][0]["message"]["content"]
+
+
+def parse_final_report(text):
+    """Разбирает разбор на short/step/full."""
+    def section(a, b):
+        try:
+            s = text.index(a) + len(a)
+            e = text.index(b, s)
+            return text[s:e].strip()
+        except ValueError:
+            return ""
+    short = section("===SHORT===", "===STEP===")
+    step = section("===STEP===", "===FULL===")
+    full = section("===FULL===", "===END===")
+    if not full:
+        full = text.split("===FULL===")[-1].replace("===END===", "").strip()
+    if not short:  # модель не дала разделители — отдадим всё как есть
+        short = text.strip()
+    return {"short": short, "step": step, "full": full}
 
 
 # ─── Обработчики ───────────────────────────────────────────
@@ -727,16 +677,11 @@ def handle_start(msg):
     name = first_name or "дорогая"
 
     send_message(chat_id,
-        f"Добро пожаловать, {name} ✦\n\n"
-        "Я — ваш личный эксперт по красоте и уходу за волосами.\n\n"
-        "Я разбираю составы косметики и помогаю улучшить состояние волос — "
-        "честно и по делу.\n\n"
-        "Команды:\n"
-        "· /start — вернуться к выбору режима\n"
-        "· /stats — ваш профиль\n"
-        "· /cosmetics — ваша база отсканированной косметики\n"
-        "· /app — приложение с планом и чатом (Премиум)\n"
-        "· /idea — предложить идею разработчику"
+        f"Привет, {name} ✦\n\n"
+        "Я помогу с волосами и разберу состав косметики — честно и по делу.",
+        reply_markup={"inline_keyboard": [[
+            {"text": "Продолжить ✨", "callback_data": "continue_start"}
+        ]]}
     )
 
     # Создаём пользователя при необходимости и сбрасываем состояние
@@ -758,9 +703,6 @@ def handle_start(msg):
                 conn.commit()
     except Exception as e:
         print(f"Error in start: {e}")
-
-    time.sleep(1)
-    send_mode_picker(chat_id)
 
 
 def send_mode_picker(chat_id):
@@ -901,14 +843,19 @@ def deliver_final_report(chat_id, user_id):
     )
     try:
         report = generate_final_report(user)
-        update_user(user_id, final_report=report)
+        parsed = parse_final_report(report)
+        # Сохраняем полный план для кнопки «Подробнее»
+        update_user(user_id, final_report=parsed["full"] or report)
         consume_ai_action(user_id, way, "plan")
-        send_message(chat_id, report)
-        send_message(chat_id,
-            "◦ Это ваш персональный план ✦\n\n"
-            "В любой момент пришлите фото косметического средства — "
-            "и я разберу его состав специально для вас."
-        )
+
+        short = "✦ Ваш разбор\n\n" + parsed["short"]
+        if parsed["step"]:
+            short += "\n\n▸ Первый шаг: " + parsed["step"]
+        kb = []
+        if parsed["full"]:
+            kb.append([{"text": "Подробнее ▾", "callback_data": "report_full"}])
+        send_message(chat_id, short, reply_markup={"inline_keyboard": kb} if kb else None)
+        send_message(chat_id, "◦ Пришлите фото косметики — разберу состав. Или откройте /app")
     except Exception as e:
         print(f"Error final report: {e}")
         send_message(chat_id,
@@ -1341,6 +1288,17 @@ def handle_callback(callback):
         return
 
     tg("answerCallbackQuery", {"callback_query_id": query_id})
+
+    # Кнопка «Продолжить» после приветствия
+    if data == "continue_start":
+        send_mode_picker(chat_id)
+        return
+
+    # Полный план по кнопке «Подробнее»
+    if data == "report_full":
+        full = (user or {}).get("final_report") or ""
+        send_message(chat_id, ("✦ Подробный план\n\n" + full) if full else "◦ План пока недоступен.")
+        return
 
     # Выбор режима
     if data == "mode_scanner":
