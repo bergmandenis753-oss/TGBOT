@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Уход за волосами</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #f6ecfb;
+    --card: #ffffff;
+    --text: #5a4a6b;
+    --title: #6b4c8a;
+    --hint: #9b7bb8;
+    --muted: #b09ec2;
+    --accent: #a273d6;
+    --accent2: #c8a8e9;
+    --soft: #efe2f7;
+    --shadow: 0 3px 12px rgba(155,110,200,0.10);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "SF Pro", "Segoe UI", Roboto, sans-serif;
+    padding-bottom: 84px;
+  }
+  header { padding: 18px 18px 10px; }
+  h1 { font-size: 17px; margin: 0 0 14px; font-weight: 500; color: var(--title); }
+  .progress-wrap { background: var(--card); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+  .progress-top { display:flex; justify-content:space-between; font-size:13px; color:var(--hint); margin-bottom:10px; }
+  .progress-top b { color: var(--accent); font-weight: 500; }
+  .bar { height: 10px; background: var(--soft); border-radius: 8px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0%; background: linear-gradient(90deg,var(--accent2),var(--accent)); border-radius:8px; transition: width .45s ease; }
+  main { padding: 6px 18px 18px; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+  .card { background: var(--card); border-radius: 18px; padding: 15px 17px; margin-bottom: 10px; box-shadow: var(--shadow); }
+  .card h3 { margin:0 0 6px; font-size:15px; font-weight:500; color: var(--title); }
+  .card .meta { font-size:12.5px; color:var(--hint); white-space:pre-wrap; line-height:1.5; }
+  .empty { color: var(--muted); text-align:center; padding: 46px 14px; font-size:14px; line-height:1.6; }
+  .day-title { font-size:12px; color:var(--accent); margin: 12px 2px 8px; font-weight:500; letter-spacing:.4px; text-transform:uppercase; }
+  .task { display:flex; align-items:center; gap:12px; background:var(--card); border-radius:14px; padding:13px 15px; margin-bottom:9px; box-shadow:var(--shadow); cursor:pointer; }
+  .task .box { width:24px; height:24px; border-radius:8px; border:2px solid #d9c5ea; flex:0 0 auto; display:flex; align-items:center; justify-content:center; transition:.2s; }
+  .task.done .box { background:var(--accent); border-color:var(--accent); }
+  .task .box svg { width:14px; height:14px; opacity:0; transition:.2s; }
+  .task.done .box svg { opacity:1; }
+  .task .t { font-size:14px; line-height:1.35; color: var(--text); }
+  .task.done .t { color:var(--muted); text-decoration:line-through; }
+  .btn { display:block; width:100%; border:none; border-radius:14px; padding:15px; font-size:15px; font-weight:500;
+         background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; cursor:pointer; margin-top:6px; box-shadow:0 4px 12px rgba(162,115,214,0.28); }
+  .btn.secondary { background: var(--card); color: var(--accent); box-shadow: var(--shadow); }
+  .chat { display:flex; flex-direction:column; gap:9px; padding-bottom: 8px; }
+  .msg { max-width:82%; padding:11px 14px; border-radius:16px; font-size:14px; line-height:1.4; white-space:pre-wrap; box-shadow:var(--shadow); }
+  .msg.user { align-self:flex-end; background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; border-bottom-right-radius:5px; box-shadow:none; }
+  .msg.assistant { align-self:flex-start; background:var(--card); color:var(--text); border-bottom-left-radius:5px; }
+  .chat-input { position:fixed; left:0; right:0; bottom:78px; display:flex; gap:8px; padding:8px 14px; background:var(--bg); }
+  .chat-input input { flex:1; border:none; border-radius:22px; padding:12px 16px; background:var(--card); color:var(--text); font-size:14px; outline:none; box-shadow:var(--shadow); }
+  .chat-input button { border:none; border-radius:22px; padding:0 18px; background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; font-weight:500; cursor:pointer; font-size:16px; }
+  nav { position:fixed; left:0; right:0; bottom:0; display:flex; background:var(--card); border-top:0.5px solid var(--soft); padding: 4px 0 calc(4px + env(safe-area-inset-bottom)); box-shadow: 0 -3px 14px rgba(155,110,200,0.08); }
+  nav button { flex:1; background:none; border:none; color:var(--muted); padding:8px 4px 8px; font-size:11px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:4px; transition:.2s; }
+  nav button.active { color:var(--accent); }
+  nav .ico { width:38px; height:38px; border-radius:12px; background:var(--soft); display:flex; align-items:center; justify-content:center; transition:.2s; }
+  nav button.active .ico { background:#e7d6f5; }
+  nav .ico svg { width:24px; height:24px; }
+  .lock { text-align:center; padding:50px 22px; color:var(--hint); line-height:1.6; }
+  .lock .big { width:72px; height:72px; margin:0 auto 14px; }
+  .spinner { text-align:center; color:var(--muted); padding:34px; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Уход за волосами ✦</h1>
+  <div class="progress-wrap">
+    <div class="progress-top"><span>Прогресс недели</span><b id="pct">0%</b></div>
+    <div class="bar"><i id="barfill"></i></div>
+  </div>
+</header>
+
+<main>
+  <section class="tab active" id="tab-progress"><div id="tasks-area"><div class="spinner">Загрузка…</div></div></section>
+  <section class="tab" id="tab-plan"><div id="plan-area"><div class="spinner">Загрузка…</div></div></section>
+  <section class="tab" id="tab-cosmetics"><div id="cos-area"><div class="spinner">Загрузка…</div></div></section>
+  <section class="tab" id="tab-chat"><div class="chat" id="chat-area"></div></section>
+</main>
+
+<div class="chat-input" id="chat-input" style="display:none">
+  <input id="chat-text" placeholder="Спросите эксперта…" autocomplete="off">
+  <button id="chat-send">→</button>
+</div>
+
+<nav>
+  <button data-tab="progress" class="active">
+    <span class="ico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#ece0f7"/><path d="M9 24a15 15 0 1 1 6 12" stroke="#a273d6" stroke-width="4" stroke-linecap="round"/><rect x="17" y="26" width="3.6" height="6" rx="1.5" fill="#b98fe0"/><rect x="22.5" y="22" width="3.6" height="10" rx="1.5" fill="#b98fe0"/><rect x="28" y="18" width="3.6" height="14" rx="1.5" fill="#b98fe0"/><path d="M17 24l5-4 5-3 4-4" stroke="#a273d6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M27 12h5v5" stroke="#a273d6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Прогресс</button>
+  <button data-tab="plan">
+    <span class="ico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#f0e7f9"/><rect x="14" y="13" width="20" height="22" rx="5" fill="#fff"/><rect x="18" y="19" width="13" height="2.6" rx="1.3" fill="#b98fe0"/><rect x="18" y="24" width="13" height="2.6" rx="1.3" fill="#b98fe0"/><rect x="18" y="29" width="8" height="2.6" rx="1.3" fill="#b98fe0"/><path d="M27 31l3 3 6-6" stroke="#a273d6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>План</button>
+  <button data-tab="cosmetics">
+    <span class="ico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#f0e7f9"/><rect x="19" y="11" width="10" height="5" rx="2" fill="#b98fe0"/><rect x="17" y="16" width="14" height="22" rx="6" fill="#fff"/><rect x="17" y="24" width="14" height="14" rx="6" fill="#dcc8ef"/><circle cx="34" cy="20" r="2" fill="#c8a8e9"/><circle cx="13" cy="30" r="1.6" fill="#c8a8e9"/></svg></span>Косметика</button>
+  <button data-tab="chat">
+    <span class="ico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#e9e4fb"/><path d="M14 22c0-5 5-9 11-9s11 4 11 9-5 9-11 9c-1.4 0-2.7-.2-4-.5L16 33l1.3-4.2C15.2 27.2 14 24.7 14 22z" fill="#8b7fe0"/><circle cx="20" cy="22" r="1.8" fill="#efe7ff"/><circle cx="25" cy="22" r="1.8" fill="#efe7ff"/><circle cx="30" cy="22" r="1.8" fill="#efe7ff"/></svg></span>Чат</button>
+</nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const INIT = tg?.initData || "";
+let isPremium = false;
+const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2"><path d="M5 12l5 5L20 6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const LOCK = '<svg viewBox="0 0 48 48" fill="none"><rect x="12" y="22" width="24" height="18" rx="5" fill="#dcc8ef"/><path d="M17 22v-4a7 7 0 0 1 14 0v4" stroke="#a273d6" stroke-width="3.4" stroke-linecap="round"/><circle cx="24" cy="30" r="2.6" fill="#a273d6"/></svg>';
+
+async function api(path, extra={}) {
+  const res = await fetch(path, { method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ init_data: INIT, ...extra }) });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+function setProgress(p){ document.getElementById("pct").textContent=(p||0)+"%"; document.getElementById("barfill").style.width=(p||0)+"%"; }
+
+const navs = document.querySelectorAll("nav button");
+navs.forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+function switchTab(name){
+  navs.forEach(b => b.classList.toggle("active", b.dataset.tab===name));
+  document.querySelectorAll(".tab").forEach(s=>s.classList.remove("active"));
+  document.getElementById("tab-"+name).classList.add("active");
+  document.getElementById("chat-input").style.display = (name==="chat")?"flex":"none";
+  if(name==="progress") loadTasks();
+  if(name==="plan") loadPlan();
+  if(name==="cosmetics") loadCosmetics();
+  if(name==="chat") loadChat();
+}
+
+async function loadTasks(){
+  const area=document.getElementById("tasks-area");
+  try{
+    const d=await api("/api/tasks"); setProgress(d.percent);
+    if(!d.tasks.length){ area.innerHTML='<div class="empty">Плана пока нет.<br>Откройте вкладку «План» и нажмите «Составить план на неделю».</div>'; return; }
+    let html="", last=-1;
+    d.tasks.forEach(t=>{ if(t.day!==last){ html+=`<div class="day-title">День ${t.day+1}</div>`; last=t.day; }
+      html+=`<div class="task ${t.done?'done':''}" data-id="${t.id}"><div class="box">${CHECK}</div><div class="t">${esc(t.title)}</div></div>`; });
+    area.innerHTML=html;
+    area.querySelectorAll(".task").forEach(el=>{ el.addEventListener("click", async()=>{
+      const id=el.dataset.id, nd=!el.classList.contains("done");
+      el.classList.toggle("done", nd); tg?.HapticFeedback?.impactOccurred("light");
+      try{ await api("/api/task_toggle",{task_id:Number(id),done:nd}); }catch(e){}
+      loadTasks();
+    }); });
+  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+}
+
+async function loadPlan(){
+  const area=document.getElementById("plan-area");
+  if(!isPremium){ area.innerHTML=lockHtml(); return; }
+  try{
+    const d=await api("/api/plan");
+    if(!d.plan||!d.plan.days||!d.plan.days.length){
+      area.innerHTML='<div class="empty">Плана ещё нет.</div><button class="btn" id="gen">Составить план на неделю</button>';
+    } else {
+      let html="";
+      d.plan.days.forEach((day,i)=>{ html+=`<div class="day-title">${esc(day.day||("День "+(i+1)))}</div>`;
+        (day.tasks||[]).forEach(t=>{ html+=`<div class="card"><div class="t" style="font-size:14px;color:var(--text)">${esc(t)}</div></div>`; }); });
+      html+='<button class="btn secondary" id="gen">Составить заново</button>'; area.innerHTML=html;
+    }
+    const g=document.getElementById("gen"); if(g) g.addEventListener("click", genPlan);
+  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+}
+async function genPlan(){
+  const area=document.getElementById("plan-area");
+  area.innerHTML='<div class="spinner">Составляю план… несколько секунд</div>';
+  try{ await api("/api/plan_generate"); loadPlan(); loadTasks(); }
+  catch(e){ area.innerHTML='<div class="empty">Не удалось составить план.</div>'; }
+}
+
+async function loadCosmetics(){
+  const area=document.getElementById("cos-area");
+  try{
+    const d=await api("/api/cosmetics");
+    if(!d.items.length){ area.innerHTML='<div class="empty">Вы ещё не сканировали косметику.<br>Отправьте фото средства боту.</div>'; return; }
+    area.innerHTML=d.items.map(it=>`<div class="card"><h3>${esc(it.name)}</h3><div class="meta">${esc(it.analysis)}</div></div>`).join("");
+  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+}
+
+async function loadChat(){
+  if(!isPremium){ document.getElementById("chat-area").innerHTML=lockHtml(); document.getElementById("chat-input").style.display="none"; return; }
+  const area=document.getElementById("chat-area");
+  try{
+    const d=await api("/api/chat_history");
+    area.innerHTML=d.messages.map(m=>`<div class="msg ${m.role}">${esc(m.content)}</div>`).join("");
+    if(!d.messages.length) area.innerHTML='<div class="msg assistant">Здравствуйте! Спросите меня о ваших волосах, уходе или средствах.</div>';
+    area.scrollTop=area.scrollHeight;
+  }catch(e){}
+}
+document.getElementById("chat-send").addEventListener("click", sendChat);
+document.getElementById("chat-text").addEventListener("keydown", e=>{ if(e.key==="Enter") sendChat(); });
+async function sendChat(){
+  const input=document.getElementById("chat-text"), text=input.value.trim(); if(!text) return;
+  const area=document.getElementById("chat-area");
+  area.innerHTML+=`<div class="msg user">${esc(text)}</div>`; input.value=""; area.scrollTop=area.scrollHeight;
+  const wait=document.createElement("div"); wait.className="msg assistant"; wait.textContent="…"; area.appendChild(wait); area.scrollTop=area.scrollHeight;
+  try{ const d=await api("/api/chat",{message:text}); wait.textContent=d.reply||"—"; }catch(e){ wait.textContent="Не удалось ответить."; }
+  area.scrollTop=area.scrollHeight;
+}
+
+function lockHtml(){ return '<div class="lock"><div class="big">'+LOCK+'</div>Эта функция доступна по подписке Премиум.<br>Оформите её в боте, чтобы открыть план и чат с экспертом.</div>'; }
+function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+(async function init(){
+  try{ const me=await api("/api/me"); isPremium=me.is_premium;
+    if(me.first_name) document.getElementById("title").textContent=`${me.first_name}, добро пожаловать ✦`;
+  }catch(e){}
+  loadTasks();
+})();
+</script>
+</body>
+</html>
