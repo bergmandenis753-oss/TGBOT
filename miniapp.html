@@ -49,12 +49,16 @@
   .btn { display:block; width:100%; border:none; border-radius:14px; padding:15px; font-size:15px; font-weight:500;
          background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; cursor:pointer; margin-top:6px; box-shadow:0 4px 12px rgba(162,115,214,0.28); }
   .btn.secondary { background: var(--card); color: var(--accent); box-shadow: var(--shadow); }
-  .chat { display:flex; flex-direction:column; gap:9px; padding-bottom: 8px; }
+  .chat { display:flex; flex-direction:column; gap:9px; overflow-y:auto; flex:1; padding:2px 0 8px; }
   .msg { max-width:82%; padding:11px 14px; border-radius:16px; font-size:14px; line-height:1.4; white-space:pre-wrap; box-shadow:var(--shadow); }
   .msg.user { align-self:flex-end; background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; border-bottom-right-radius:5px; box-shadow:none; }
   .msg.assistant { align-self:flex-start; background:var(--card); color:var(--text); border-bottom-left-radius:5px; }
-  .chat-input { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:8px 14px calc(8px + env(safe-area-inset-bottom)); background:var(--bg); }
-  .chat-input input { flex:1; border:none; border-radius:22px; padding:12px 16px; background:var(--card); color:var(--text); font-size:14px; outline:none; box-shadow:var(--shadow); }
+  /* Когда открыта вкладка чата — фиксируем высоту окна, поле ввода прижато к низу контейнера */
+  body.chat-mode { padding-bottom:0; overflow:hidden; }
+  body.chat-mode header { display:none; }
+  #tab-chat.active { display:flex; flex-direction:column; height:100dvh; padding:10px 18px 8px; }
+  .chat-input { display:flex; gap:8px; padding-top:8px; }
+  .chat-input input { flex:1; border:none; border-radius:22px; padding:12px 16px; background:var(--card); color:var(--text); font-size:16px; outline:none; box-shadow:var(--shadow); }
   .chat-input button { border:none; border-radius:22px; padding:0 18px; background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#fff; font-weight:500; cursor:pointer; font-size:16px; }
   .tiles { display:grid; grid-template-columns:1fr 1fr; gap:14px; padding:14px 4px 0; }
   .tile { aspect-ratio:1/1; background:var(--card); border:none; border-radius:22px; box-shadow:var(--shadow);
@@ -108,17 +112,16 @@
   <section class="tab" id="tab-chat">
     <button class="back" data-back>‹ Назад</button>
     <div class="chat" id="chat-area"></div>
+    <div class="chat-input" id="chat-input">
+      <input id="chat-text" placeholder="Спросите эксперта…" autocomplete="off">
+      <button id="chat-send">→</button>
+    </div>
   </section>
 </main>
 
-<div class="chat-input" id="chat-input" style="display:none">
-  <input id="chat-text" placeholder="Спросите эксперта…" autocomplete="off">
-  <button id="chat-send">→</button>
-</div>
-
 <script>
 const tg = window.Telegram?.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) { tg.ready(); tg.expand(); try { tg.disableVerticalSwipes?.(); } catch(e){} }
 const INIT = tg?.initData || "";
 let isPremium = false;
 const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2"><path d="M5 12l5 5L20 6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -138,7 +141,7 @@ document.querySelectorAll("[data-back]").forEach(b => b.addEventListener("click"
 function goHome(){
   document.querySelectorAll(".tab").forEach(s=>s.classList.remove("active"));
   document.getElementById("home").style.display = "block";
-  document.getElementById("chat-input").style.display = "none";
+  document.body.classList.remove("chat-mode");
   tg?.BackButton?.hide?.();
   loadTasks(); // обновить прогресс-бар на главном
 }
@@ -147,7 +150,7 @@ function switchTab(name){
   document.getElementById("home").style.display = "none";
   document.querySelectorAll(".tab").forEach(s=>s.classList.remove("active"));
   document.getElementById("tab-"+name).classList.add("active");
-  document.getElementById("chat-input").style.display = (name==="chat")?"flex":"none";
+  document.body.classList.toggle("chat-mode", name==="chat");
   if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(goHome); }
   if(name==="progress") loadTasks();
   if(name==="plan") loadPlan();
@@ -270,7 +273,9 @@ function renderCosList(q){
 }
 
 async function loadChat(){
-  if(!isPremium){ document.getElementById("chat-area").innerHTML=lockHtml(); document.getElementById("chat-input").style.display="none"; return; }
+  const input=document.getElementById("chat-input");
+  if(!isPremium){ document.getElementById("chat-area").innerHTML=lockHtml(); input.style.display="none"; return; }
+  input.style.display="flex";
   const area=document.getElementById("chat-area");
   try{
     const d=await api("/api/chat_history");
@@ -281,6 +286,7 @@ async function loadChat(){
 }
 document.getElementById("chat-send").addEventListener("click", sendChat);
 document.getElementById("chat-text").addEventListener("keydown", e=>{ if(e.key==="Enter") sendChat(); });
+document.getElementById("chat-text").addEventListener("focus", ()=>{ setTimeout(()=>{ const a=document.getElementById("chat-area"); a.scrollTop=a.scrollHeight; }, 300); });
 async function sendChat(){
   const input=document.getElementById("chat-text"), text=input.value.trim(); if(!text) return;
   const area=document.getElementById("chat-area");
