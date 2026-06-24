@@ -207,37 +207,74 @@ def _norm_name(name):
     return " ".join(sorted(words))
 
 
+def _name_words(name):
+    """Множество значимых слов имени (без стоп-слов и описательных)."""
+    import re
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"[^\wа-я0-9 ]", " ", s)
+    stop = {"от", "by", "из", "for", "the", "and", "с", "и", "delightful", "honey",
+            "bloom", "fresh", "aroma", "scent", "ml", "мл", "объем", "объём"}
+    return {w for w in s.split() if w and w not in stop and not w.isdigit()}
+
+
+def _same_product(a, b):
+    """Считает два названия одним средством, если значимые слова одного — подмножество другого
+    (и пересечение содержательное, минимум 2 общих слова или полное вхождение короткого)."""
+    wa, wb = _name_words(a), _name_words(b)
+    if not wa or not wb:
+        return False
+    if wa == wb:
+        return True
+    inter = wa & wb
+    small = wa if len(wa) <= len(wb) else wb
+    big = wb if small is wa else wa
+    # короткое имя целиком входит в длинное → один продукт
+    if small.issubset(big):
+        return len(inter) >= 2 or len(small) >= 2
+    return False
+
+
 def cmd_dedupe(chat_id):
-    """Чистит дубли в общей базе products: группирует по нормализованному имени,
-    оставляет одну запись (с самым коротким названием), остальные удаляет."""
+    """Чистит дубли в общей базе products. Сначала точная группировка по нормализованному
+    имени, затем слияние «почти-дублей» по вхождению значимых слов (разная длина названий)."""
     removed = 0
-    groups = {}
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id, product_name, summary FROM products ORDER BY id")
-            for r in cur.fetchall():
-                key = _norm_name(r["product_name"])
-                if not key:
-                    continue
-                groups.setdefault(key, []).append(r)
-            to_delete = []
-            kept_lines = []
-            for key, rows in groups.items():
-                if len(rows) < 2:
-                    continue
-                # оставляем запись с заполненным summary и самым коротким названием
-                rows_sorted = sorted(
-                    rows,
-                    key=lambda x: (0 if (x.get("summary") or "").strip() else 1, len(x["product_name"] or ""))
-                )
-                keep = rows_sorted[0]
-                kept_lines.append(f"✓ {keep['product_name']}")
-                for r in rows_sorted[1:]:
-                    to_delete.append(r["id"])
-            if to_delete:
+            rows = cur.fetchall()
+    # формируем группы: каждая новая запись либо примыкает к существующей группе, либо создаёт новую
+    groups = []  # список списков rows
+    for r in rows:
+        placed = False
+        for g in groups:
+            if _same_product(r["product_name"], g[0]["product_name"]):
+                g.append(r)
+                placed = True
+                break
+        if not placed:
+            groups.append([r])
+
+    to_delete = []
+    kept_lines = []
+    for g in groups:
+        if len(g) < 2:
+            continue
+        # оставляем запись с заполненным summary и самым коротким названием
+        g_sorted = sorted(
+            g, key=lambda x: (0 if (x.get("summary") or "").strip() else 1, len(x["product_name"] or ""))
+        )
+        keep = g_sorted[0]
+        kept_lines.append(f"✓ {keep['product_name']}")
+        for r in g_sorted[1:]:
+            to_delete.append(r["id"])
+
+    if to_delete:
+        with get_db() as conn:
+            with conn.cursor() as cur:
                 cur.execute("DELETE FROM products WHERE id = ANY(%s)", (to_delete,))
                 removed = cur.rowcount
                 conn.commit()
+
     if removed:
         send(chat_id, f"🧹 Удалено дублей в общей базе: {removed}\n\nОставлены:\n" + "\n".join(kept_lines))
     else:

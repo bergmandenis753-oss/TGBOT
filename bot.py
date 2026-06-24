@@ -634,8 +634,11 @@ def detect_product_name(image_bytes):
     image_b64 = base64.standard_b64encode(image_bytes).decode()
     prompt = (
         "На фото косметическое средство. Ответь ТОЛЬКО его официальным названием "
-        "в формате «Бренд Линейка», строго как на упаковке, без рекламных слов, "
-        "аромата и объёма. Если бренд не виден — опиши тип средства кратко. Одна строка, без кавычек."
+        "в формате «Бренд Линейка Тип», строго как на упаковке. "
+        "ОБЯЗАТЕЛЬНО убери: название аромата/отдушки (например Delightful Honey Bloom, Fresh Aroma), "
+        "объём, рекламные слова. Оставь только бренд, линейку и тип средства. "
+        "Порядок слов: сначала бренд, потом линейка, потом тип. "
+        "Если бренд не виден — опиши тип средства кратко. Одна строка, без кавычек."
     )
     try:
         resp = requests.post(
@@ -657,10 +660,34 @@ def detect_product_name(image_bytes):
         return "Косметика"
 
 
+def _name_words(name):
+    """Множество значимых слов имени (без стоп- и описательных слов)."""
+    import re
+    s = (name or "").lower().replace("ё", "е")
+    s = re.sub(r"[^\wа-я0-9 ]", " ", s)
+    stop = {"от", "by", "из", "for", "the", "and", "с", "и", "delightful", "honey",
+            "bloom", "fresh", "aroma", "scent", "ml", "мл", "объем", "объём"}
+    return {w for w in s.split() if w and w not in stop and not w.isdigit()}
+
+
+def same_product_name(a, b):
+    """Одно ли это средство: точное совпадение слов или вхождение короткого имени в длинное."""
+    wa, wb = _name_words(a), _name_words(b)
+    if not wa or not wb:
+        return False
+    if wa == wb:
+        return True
+    inter = wa & wb
+    small = wa if len(wa) <= len(wb) else wb
+    big = wb if small is wa else wa
+    if small.issubset(big):
+        return len(inter) >= 2 or len(small) >= 2
+    return False
+
+
 def find_cached_by_name(product_name):
-    """Ищет готовый разбор в общей базе products по нормализованному имени.
+    """Ищет готовый разбор в общей базе products по «умному» совпадению имени.
     Возвращает dict с product_name/analysis/summary/ingredients/usage или None."""
-    norm = normalize_name(product_name)
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -669,7 +696,7 @@ def find_cached_by_name(product_name):
                     "WHERE summary IS NOT NULL AND summary <> '' ORDER BY created_at, id"
                 )
                 for r in cur.fetchall():
-                    if normalize_name(r["product_name"]) == norm:
+                    if same_product_name(r["product_name"], product_name):
                         return r
     except Exception as e:
         print(f"find_cached_by_name error: {e}")
