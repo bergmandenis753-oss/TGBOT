@@ -1118,11 +1118,11 @@ def send_intro_post(chat_id):
         "Личный план ухода на неделю, прогресс с заданиями, ваша база средств "
         "и чат с экспертом — всё в одном месте, в стиле уютного бьюти-дневника."
     )
-    markup = None
+    rows = []
     if WEBAPP_URL:
-        markup = {"inline_keyboard": [[
-            {"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}
-        ]]}
+        rows.append([{"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}])
+    rows.append([{"text": "Продолжить ✨", "callback_data": "intro_continue"}])
+    markup = {"inline_keyboard": rows}
     # Пытаемся отправить превью приложения как фото с подписью
     img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_preview.png")
     sent = False
@@ -1751,6 +1751,8 @@ def handle_callback(callback):
     # Кнопка «Продолжить» после приветствия
     if data == "continue_start":
         send_intro_post(chat_id)
+        return
+    if data == "intro_continue":
         send_mode_picker(chat_id)
         return
 
