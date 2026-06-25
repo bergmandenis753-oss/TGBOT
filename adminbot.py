@@ -281,6 +281,32 @@ def cmd_dedupe(chat_id):
         send(chat_id, "Дублей в общей базе не найдено ✓")
 
 
+def cmd_cleandiag(chat_id):
+    removed = 0
+    sql = (
+        "DELETE FROM hair_diagnostics WHERE id IN ("
+        " SELECT id FROM ("
+        "  SELECT id, ROW_NUMBER() OVER ("
+        "   PARTITION BY user_id, created_at::date ORDER BY created_at DESC, id DESC"
+        "  ) AS rn FROM hair_diagnostics"
+        " ) t WHERE t.rn > 1"
+        ")"
+    )
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                removed = cur.rowcount
+            conn.commit()
+    except Exception as e:
+        send(chat_id, "Ошибка: " + str(e))
+        return
+    if removed:
+        send(chat_id, "Удалено лишних диагностик: " + str(removed) + ". По одной записи на день.")
+    else:
+        send(chat_id, "Дублей диагностик за день не найдено.")
+
+
 def cmd_stats(chat_id):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -351,7 +377,8 @@ def handle_update(update):
              "/revoke <id|@логин> — снять Премиум\n"
              "/ideas — идеи от пользователей\n"
              "/stats — общая статистика\n"
-             "/dedupe — удалить дубли в общей базе косметики")
+             "/dedupe — удалить дубли в общей базе косметики\n"
+             "/cleandiag — оставить по одной диагностике волос на день")
     elif cmd == "/users":
         cmd_users(chat_id)
     elif cmd == "/ideas":
@@ -360,6 +387,8 @@ def handle_update(update):
         cmd_stats(chat_id)
     elif cmd == "/dedupe":
         cmd_dedupe(chat_id)
+    elif cmd == "/cleandiag":
+        cmd_cleandiag(chat_id)
     elif cmd == "/user":
         if not arg:
             send(chat_id, "Использование: /user <id|@логин>")
