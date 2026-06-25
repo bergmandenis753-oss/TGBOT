@@ -629,6 +629,92 @@ def analyze_cosmetic(image_bytes):
     return parsed
 
 
+def _store_search_links(query, country):
+    """Готовые ссылки-поиски по магазинам региона (без скрапинга, всегда рабочие)."""
+    from urllib.parse import quote_plus
+    q = quote_plus(query)
+    c = (country or "").strip().lower()
+    links = []
+    if any(x in c for x in ["украин", "ukrain", "україн"]):
+        links.append(("Rozetka", f"https://rozetka.com.ua/search/?text={q}"))
+        links.append(("Prom.ua", f"https://prom.ua/search?search_term={q}"))
+    elif any(x in c for x in ["росси", "russia", "рф"]):
+        links.append(("Wildberries", f"https://www.wildberries.ru/catalog/0/search.aspx?search={q}"))
+        links.append(("Ozon", f"https://www.ozon.ru/search/?text={q}"))
+    elif any(x in c for x in ["казах", "kazakh"]):
+        links.append(("Kaspi", f"https://kaspi.kz/shop/search/?text={q}"))
+    elif any(x in c for x in ["беларус", "belarus"]):
+        links.append(("Wildberries", f"https://www.wildberries.by/catalog/0/search.aspx?search={q}"))
+    else:
+        links.append(("Amazon", f"https://www.amazon.com/s?k={q}"))
+    links.append(("Google Покупки", f"https://www.google.com/search?tbm=shop&q={q}"))
+    return links
+
+
+def find_analogs(cosmetic, user):
+    """Подбирает аналоги (дешевле/лучше) с учётом состава и региона пользователя.
+    GPT даёт сами аналоги, затем добавляем ссылки-поиски по магазинам региона."""
+    name = cosmetic.get("product_name") or "средство"
+    ingredients = (cosmetic.get("ingredients") or "")[:400]
+    summary = (cosmetic.get("summary") or "")[:300]
+    country = user.get("country") or ""
+    city = user.get("city") or ""
+    region = ", ".join(filter(None, [city, country])) or "не указан"
+
+    prompt = (
+        f"Ты — эксперт по косметике для волос. Пользователь отсканировал средство:\n"
+        f"Название: {name}\n"
+        f"Суть: {summary}\n"
+        f"Состав (ключевое): {ingredients}\n"
+        f"Регион пользователя: {region}\n\n"
+        "Предложи 3 аналога этого средства по действию и составу:\n"
+        "— 1 ДЕШЕВЛЕ (бюджетная замена с похожим эффектом)\n"
+        "— 1 ПОХОЖЕЕ по цене, но качественнее/удачнее по составу\n"
+        "— 1 на свой выбор (лучший по соотношению цена/качество)\n"
+        "Выбирай бренды, которые реально продаются в этом регионе. "
+        "Для каждого: название (Бренд + средство), 1 строка почему это хорошая замена, "
+        "и пометка ценовой категории (бюджет / средний / премиум).\n"
+        "Ответь СТРОГО так, без вступлений:\n"
+        "1. <Бренд Название> — <почему> (категория)\n"
+        "2. ...\n"
+        "3. ...\n"
+        "В конце 1 короткая строка-совет на что смотреть при выборе."
+    )
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 500,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            verify=VERIFY, timeout=60,
+        )
+        body = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"find_analogs gpt error: {e}")
+        body = "Не удалось подобрать аналоги сейчас."
+
+    import re
+    picks = re.findall(r"^\s*\d+\.\s*([^—\-\n]+)", body, flags=re.MULTILINE)
+    links_text = ""
+    seen = set()
+    for pick in (picks[:3] or [name]):
+        q = pick.strip(" .—-")
+        if not q or q.lower() in seen:
+            continue
+        seen.add(q.lower())
+        links = _store_search_links(q, country)
+        links_text += f"\n🔎 {q}:\n" + "\n".join(f"  · {t}: {url}" for t, url in links) + "\n"
+
+    region_note = f"\n\n📍 Регион: {region}" if region != "не указан" else (
+        "\n\n📍 Регион не указан — ссылки общие. Заполните город в профиле (/restart), "
+        "чтобы искать в ваших магазинах."
+    )
+    return f"✦ Аналоги для «{name}»\n\n{body}\n{links_text}{region_note}"
+
+
 def detect_product_name(image_bytes):
     """Дешёвый запрос: только официальное название средства по фото (мало токенов)."""
     image_b64 = base64.standard_b64encode(image_bytes).decode()
@@ -1283,6 +1369,8 @@ def process_product_photo(chat_id, user, image_bytes):
         if cos_id and parsed["usage"]:
             detail_row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
         kb = [detail_row] if detail_row else []
+        if cos_id:
+            kb.append([{"text": "🔎 Поиск аналогов ✦", "callback_data": f"analogs_{cos_id}"}])
         send_message(chat_id, head, reply_markup={"inline_keyboard": kb} if kb else None)
     except Exception as e:
         print(f"Error analyzing product: {e}")
@@ -1351,6 +1439,7 @@ def process_scanner_photo(chat_id, user, image_bytes):
                 row.append({"text": "Как использовать", "callback_data": f"cosuse_{cos_id}"})
             if row:
                 buttons.append(row)
+            buttons.append([{"text": "🔎 Поиск аналогов ✦", "callback_data": f"analogs_{cos_id}"}])
         send_message(chat_id, head,
                      reply_markup={"inline_keyboard": buttons} if buttons else None)
         send_message(chat_id, "◦ Сохранено в вашу базу — /cosmetics или приложение /app")
@@ -1470,6 +1559,27 @@ def handle_callback(callback):
         if match:
             text = match.get("usage") or "Нет инструкции по применению."
             send_message(chat_id, "✦ Как использовать · " + (match.get("product_name") or "") + "\n\n" + text)
+        return
+    # Поиск аналогов (Pro): analogs_<id>
+    if data.startswith("analogs_"):
+        try:
+            cid = int(data.split("_")[1])
+        except (ValueError, IndexError):
+            return
+        u = get_user(user_id)
+        if not subscription_active(u):
+            offer_subscription(chat_id, "Поиск аналогов доступен в Премиуме.")
+            return
+        match = next((c for c in get_user_cosmetics(user_id) if c["id"] == cid), None)
+        if not match:
+            return
+        send_message(chat_id, "🔎 Ищу аналоги — дешевле и лучше...")
+        try:
+            text = find_analogs(match, u)
+            send_message(chat_id, text)
+        except Exception as e:
+            print(f"analogs error: {e}")
+            send_message(chat_id, "Не удалось найти аналоги сейчас. Попробуйте позже.")
         return
 
     # Открыть конкретную косметику из списка: cos_<id>

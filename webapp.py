@@ -336,6 +336,30 @@ async def api_chat(request: Request):
     return {"reply": reply}
 
 
+@app.post("/api/compatibility")
+async def api_compatibility(request: Request):
+    """Анализ совместимости средств пользователя (Pro). Что с чем сочетается / конфликтует."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    u = fetch_user(user_id)
+    if not subscription_active(u):
+        raise HTTPException(status_code=403, detail="Premium only")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT product_name, ingredients FROM user_cosmetics "
+                "WHERE user_id = %s AND product_name IS NOT NULL ORDER BY product_name",
+                (user_id,)
+            )
+            rows = cur.fetchall()
+    if not rows:
+        return {"result": "", "empty": True}
+    if len(rows) < 2:
+        return {"result": "Добавьте хотя бы 2 средства, чтобы проверить их сочетаемость.", "empty": False}
+    result = compatibility_check(rows)
+    return {"result": result, "empty": False}
+
+
 @app.post("/api/chat_history")
 async def api_chat_history(request: Request):
     body = await request.json()
@@ -460,6 +484,43 @@ def get_user_cosmetic_names(user_id):
     except Exception as e:
         print(f"get_user_cosmetic_names error: {e}")
         return []
+
+
+def compatibility_check(rows):
+    """rows — список {product_name, ingredients}. Возвращает текст-анализ сочетаемости."""
+    lines = []
+    for r in rows:
+        ing = (r.get("ingredients") or "").strip()
+        ing_short = (ing[:300] + "…") if len(ing) > 300 else ing
+        lines.append(f"· {r['product_name']}" + (f" — состав: {ing_short}" if ing_short else ""))
+    products_block = "\n".join(lines)
+    prompt = (
+        "Ты — эксперт по уходу за волосами. Ниже список средств пользователя с составом.\n"
+        "Проанализируй их СОЧЕТАЕМОСТЬ между собой: что хорошо работает вместе, "
+        "а что конфликтует или ослабляет эффект друг друга (например силиконы + бессульфатный шампунь, "
+        "кислоты + протеины, несовместимый порядок применения и т.п.).\n\n"
+        f"Средства:\n{products_block}\n\n"
+        "Ответь кратко и по делу, тёплым тоном, СТРОГО в таком виде, без вступлений:\n"
+        "✓ Хорошо вместе:\n— пара средств: почему (1 строка)\n\n"
+        "⚠ Осторожно:\n— пара средств: в чём конфликт и что делать (1 строка)\n\n"
+        "💡 Совет по порядку применения: 1–2 строки.\n"
+        "Если конфликтов нет — так и напиши. Не выдумывай несуществующие проблемы."
+    )
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 700,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=60,
+        )
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"compatibility_check error: {e}")
+        return "Не удалось проанализировать сейчас. Попробуйте ещё раз чуть позже."
 
 
 def expert_chat(u, message, use_cosmetics=False):
