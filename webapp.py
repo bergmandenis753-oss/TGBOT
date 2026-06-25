@@ -344,20 +344,70 @@ async def api_compatibility(request: Request):
     u = fetch_user(user_id)
     if not subscription_active(u):
         raise HTTPException(status_code=403, detail="Premium only")
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT product_name, ingredients FROM user_cosmetics "
-                "WHERE user_id = %s AND product_name IS NOT NULL ORDER BY product_name",
-                (user_id,)
-            )
-            rows = cur.fetchall()
+    ids = body.get("ids")  # опционально: список id выбранных средств
+    if ids:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT product_name, ingredients FROM user_cosmetics "
+                    "WHERE user_id = %s AND id = ANY(%s) AND product_name IS NOT NULL ORDER BY product_name",
+                    (user_id, [int(i) for i in ids])
+                )
+                rows = cur.fetchall()
+    else:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT product_name, ingredients FROM user_cosmetics "
+                    "WHERE user_id = %s AND product_name IS NOT NULL ORDER BY product_name",
+                    (user_id,)
+                )
+                rows = cur.fetchall()
     if not rows:
         return {"result": "", "empty": True}
     if len(rows) < 2:
-        return {"result": "Добавьте хотя бы 2 средства, чтобы проверить их сочетаемость.", "empty": False}
+        return {"result": "Выберите хотя бы 2 средства, чтобы проверить их сочетаемость.", "empty": False}
     result = compatibility_check(rows)
     return {"result": result, "empty": False}
+
+
+@app.post("/api/progress")
+async def api_progress(request: Request):
+    """Прогресс волос: текущий рейтинг + история диагностик."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT rating, problems, created_at FROM hair_diagnostics "
+                "WHERE user_id = %s ORDER BY created_at DESC, id DESC LIMIT 20",
+                (user_id,)
+            )
+            rows = cur.fetchall()
+    history = [{
+        "rating": r["rating"],
+        "problems": r.get("problems") or "",
+        "date": r["created_at"].strftime("%d.%m.%Y") if r.get("created_at") else "",
+    } for r in rows]
+    current = history[0]["rating"] if history else None
+    return {"current": current, "history": history, "bot_username": get_bot_username()}
+
+
+_BOT_USERNAME_CACHE = {"v": None}
+
+def get_bot_username():
+    """Имя бота (для deep-link). Берём из env или через getMe, кэшируем."""
+    if _BOT_USERNAME_CACHE["v"] is not None:
+        return _BOT_USERNAME_CACHE["v"]
+    uname = os.getenv("BOT_USERNAME", "")
+    if not uname and BOT_TOKEN:
+        try:
+            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=10)
+            uname = r.json().get("result", {}).get("username", "") or ""
+        except Exception as e:
+            print(f"get_bot_username error: {e}")
+    _BOT_USERNAME_CACHE["v"] = uname
+    return uname
 
 
 @app.post("/api/chat_history")

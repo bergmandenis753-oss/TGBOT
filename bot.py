@@ -1030,6 +1030,14 @@ def handle_start(msg):
     username = msg["from"].get("username", "")
     first_name = msg["from"].get("first_name", "")
 
+    # Deep-link из Mini App: /start diag → сразу диагностика волос
+    parts = (msg.get("text") or "").split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    if payload == "diag":
+        get_user(user_id, username=username, first_name=first_name)
+        handle_diagnostics(msg)
+        return
+
     name = first_name or "дорогая"
 
     send_message(chat_id,

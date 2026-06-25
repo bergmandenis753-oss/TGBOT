@@ -170,22 +170,64 @@ function switchTab(name){
   if(name==="chat") loadChat();
 }
 
+function diagBlockHtml(p){
+  const cur=p&&p.current!=null?p.current.toFixed(1):"—";
+  let hist="";
+  if(p&&p.history&&p.history.length){
+    hist='<div class="day-title" style="margin-top:14px;">История диагностик</div>';
+    p.history.forEach(h=>{
+      hist+='<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:6px 0;border-bottom:1px solid var(--soft);">'
+        +'<span>'+esc(h.date||"")+'</span><b style="color:var(--accent);">'+(h.rating!=null?Number(h.rating).toFixed(1)+"/10":"—")+'</b></div>';
+    });
+  } else {
+    hist='<div class="meta" style="color:var(--muted);margin-top:10px;">Диагностики ещё не было. Сделайте первую — и здесь появится ваш рейтинг и динамика.</div>';
+  }
+  return '<div class="card" style="margin-bottom:14px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;">'
+    +'<h3 style="margin:0;">Диагностика волос</h3>'
+    +'<b style="color:var(--accent);font-size:20px;">'+cur+(cur!=="—"?'/10':'')+'</b></div>'
+    +hist
+    +'<button class="btn" id="diag-btn" style="margin-top:14px;">📸 Сделать диагностику</button>'
+    +'</div>';
+}
+
 async function loadTasks(){
   const area=document.getElementById("tasks-area");
+  let diagHtml="";
+  try{ diagHtml=diagBlockHtml(await api("/api/progress")); }
+  catch(e){ diagHtml=diagBlockHtml(null); }
   try{
     const d=await api("/api/tasks"); setProgress(d.percent);
-    if(!d.tasks.length){ area.innerHTML='<div class="empty">Плана пока нет.<br>Откройте «План» и нажмите «Составить план на неделю».</div>'; return; }
-    let html="", last=-1;
-    d.tasks.forEach(t=>{ if(t.day!==last){ html+=`<div class="day-title">День ${t.day+1}</div>`; last=t.day; }
-      html+=`<div class="task ${t.done?'done':''}" data-id="${t.id}"><div class="box">${CHECK}</div><div class="t">${esc(t.title)}</div></div>`; });
+    let html=diagHtml;
+    if(!d.tasks.length){
+      html+='<div class="empty">Плана пока нет.<br>Откройте «План» и нажмите «Составить план».</div>';
+    } else {
+      let last=-1;
+      html+='<div class="day-title">Задания на сегодня</div>';
+      d.tasks.forEach(t=>{ if(t.day!==last){ html+=`<div class="day-title">День ${t.day+1}</div>`; last=t.day; }
+        html+=`<div class="task ${t.done?'done':''}" data-id="${t.id}"><div class="box">${CHECK}</div><div class="t">${esc(t.title)}</div></div>`; });
+    }
     area.innerHTML=html;
+    bindDiagBtn();
     area.querySelectorAll(".task").forEach(el=>{ el.addEventListener("click", async()=>{
       const id=el.dataset.id, nd=!el.classList.contains("done");
       el.classList.toggle("done", nd); tg?.HapticFeedback?.impactOccurred("light");
       try{ await api("/api/task_toggle",{task_id:Number(id),done:nd}); }catch(e){}
       loadTasks();
     }); });
-  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+  }catch(e){ area.innerHTML=diagHtml+'<div class="empty">Не удалось загрузить задания.</div>'; bindDiagBtn(); }
+}
+
+let BOT_USERNAME="";
+function bindDiagBtn(){
+  const b=document.getElementById("diag-btn");
+  if(!b) return;
+  b.addEventListener("click", async()=>{
+    if(!BOT_USERNAME){ try{ const p=await api("/api/progress"); BOT_USERNAME=p.bot_username||""; }catch(e){} }
+    const link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}?start=diag` : null;
+    if(link && tg?.openTelegramLink){ tg.openTelegramLink(link); tg.close?.(); }
+    else { alert("Откройте бота и отправьте команду /diagnostics, затем фото волос."); }
+  });
 }
 
 const PLAN_BLOCKS=[["care","💧 Уход и мытьё"],["nutrition","🥗 Питание"],["supplements","💊 БАДы и витамины"],["masks","🧴 Маски и средства"],["styling","✂️ Стайлинг"]];
@@ -245,6 +287,8 @@ async function genPlan(){
 
 let COS_ITEMS=[];
 let COS_SOURCE="mine";
+let COS_SELECT=false;          // режим выбора средств для совместимости
+let COS_CHECKED=new Set();     // id выбранных средств
 function cosShell(){
   const area=document.getElementById("cos-area");
   const seg=isPremium?(
@@ -253,7 +297,8 @@ function cosShell(){
     +'<button id="cos-all" style="flex:1;border:none;border-radius:9px;padding:9px;font-size:13px;font-weight:500;cursor:pointer;background:'+(COS_SOURCE==="all"?"#fff":"transparent")+';color:'+(COS_SOURCE==="all"?"var(--accent)":"var(--muted)")+';box-shadow:'+(COS_SOURCE==="all"?"var(--shadow)":"none")+';">Общая</button>'
     +'</div>'):'';
   const compatBtn=(isPremium && COS_SOURCE==="mine")?(
-    '<button id="cos-compat" class="btn secondary" style="width:100%;margin-bottom:12px;">⚗ Проверить совместимость</button>'
+    '<button id="cos-compat" class="btn secondary" style="width:100%;margin-bottom:8px;">⚗ Проверить совместимость</button>'
+    +'<div id="cos-compat-hint" style="display:'+(COS_SELECT?'block':'none')+';font-size:12px;color:var(--muted);text-align:center;margin-bottom:10px;">Отметьте средства галочками и нажмите ещё раз</div>'
     +'<div id="cos-compat-res" style="display:none;margin-bottom:12px;"></div>'):'';
   area.innerHTML=seg+compatBtn
     +'<input id="cos-search" placeholder="Поиск по названию…" autocomplete="off" style="width:100%;border:none;border-radius:14px;padding:12px 16px;margin-bottom:12px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);">'
@@ -271,18 +316,37 @@ function cosShell(){
 async function runCompatibility(){
   const btn=document.getElementById("cos-compat");
   const res=document.getElementById("cos-compat-res");
+  const hint=document.getElementById("cos-compat-hint");
   if(!btn||!res) return;
+  // первый клик — включаем режим выбора галочек
+  if(!COS_SELECT){
+    COS_SELECT=true; COS_CHECKED.clear();
+    if(hint) hint.style.display="block";
+    btn.textContent="✓ Проверить выбранные";
+    renderCosList(document.getElementById("cos-search")?.value||"");
+    return;
+  }
+  const ids=[...COS_CHECKED];
+  if(ids.length<2){
+    res.style.display="block";
+    res.innerHTML='<div class="card"><div class="meta">Отметьте минимум 2 средства галочками.</div></div>';
+    return;
+  }
   btn.disabled=true; btn.textContent="Анализирую…";
   res.style.display="block";
-  res.innerHTML='<div class="card"><div class="meta" style="color:var(--muted);">Проверяю сочетаемость ваших средств…</div></div>';
+  res.innerHTML='<div class="card"><div class="meta" style="color:var(--muted);">Проверяю сочетаемость выбранных средств…</div></div>';
   try{
-    const d=await api("/api/compatibility",{});
-    if(d.empty){ res.innerHTML='<div class="card"><div class="meta">Отсканируйте средства, чтобы проверить их сочетаемость.</div></div>'; }
+    const d=await api("/api/compatibility",{ids});
+    if(d.empty){ res.innerHTML='<div class="card"><div class="meta">Нет данных по выбранным средствам.</div></div>'; }
     else{ res.innerHTML='<div class="card"><div class="meta" style="white-space:pre-wrap;">'+esc(d.result||"")+'</div></div>'; }
   }catch(e){
     res.innerHTML='<div class="card"><div class="meta">Не удалось проверить. Попробуйте ещё раз.</div></div>';
   }
+  // сбрасываем режим выбора
+  COS_SELECT=false; COS_CHECKED.clear();
+  if(hint) hint.style.display="none";
   btn.disabled=false; btn.textContent="⚗ Проверить совместимость";
+  renderCosList(document.getElementById("cos-search")?.value||"");
 }
 async function loadCosmetics(){
   cosShell();
@@ -304,11 +368,13 @@ function renderCosList(q){
   const items=f?COS_ITEMS.filter(it=>(it.name||"").toLowerCase().includes(f)):COS_ITEMS;
   if(!items.length){ list.innerHTML='<div class="empty">Ничего не найдено.</div>'; return; }
   const mine = COS_SOURCE==="mine";
+  const selecting = COS_SELECT && mine;
   list.innerHTML=items.map(it=>`
-    <div class="card cos-card" data-id="${it.id}" style="cursor:pointer;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="margin:0;">${esc(it.name)}</h3>
-        <span class="chev" style="color:var(--muted);font-size:18px;">›</span>
+    <div class="card cos-card" data-id="${it.id}" style="cursor:pointer;${selecting&&COS_CHECKED.has(it.id)?'outline:2px solid var(--accent);':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        ${selecting?`<span class="cos-check" style="width:22px;height:22px;flex:none;border-radius:7px;border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;background:${COS_CHECKED.has(it.id)?'var(--accent)':'transparent'};">${COS_CHECKED.has(it.id)?'✓':''}</span>`:''}
+        <h3 style="margin:0;flex:1;">${esc(it.name)}</h3>
+        <span class="chev" style="color:var(--muted);font-size:18px;">${selecting?'':'›'}</span>
       </div>
       <div class="cos-detail" style="display:none;margin-top:10px;">
         <div class="meta">${esc(it.summary||it.analysis||"")}</div>
@@ -329,6 +395,13 @@ function renderCosList(q){
     const it=COS_ITEMS.find(x=>x.id===id);
     card.addEventListener("click",ev=>{
       if(ev.target.closest(".cos-sub")||ev.target.closest(".rev-input")||ev.target.closest(".rev-send")||ev.target.closest(".cos-del")) return;
+      // режим выбора для совместимости — клик переключает галочку
+      if(COS_SELECT && COS_SOURCE==="mine"){
+        if(COS_CHECKED.has(id)) COS_CHECKED.delete(id); else COS_CHECKED.add(id);
+        tg?.HapticFeedback?.selectionChanged?.();
+        renderCosList(document.getElementById("cos-search")?.value||"");
+        return;
+      }
       const d=card.querySelector(".cos-detail");
       const open=d.style.display!=="none";
       d.style.display=open?"none":"block";
