@@ -532,12 +532,12 @@ async function loadIngredients(){
 }
 function renderIngrChips(){
   const box=document.getElementById("ingr-chips"); if(!box) return;
-  const mk=(key,label)=>{
-    const on=INGR_CAT===key;
+  const mk=(key,label,catVal)=>{
+    const on=INGR_CAT===catVal;
     return '<button class="ingr-chip" data-cat="'+key+'" style="border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;background:'+(on?'linear-gradient(135deg,var(--accent2),var(--accent))':'var(--card)')+';color:'+(on?'#fff':'var(--accent)')+';box-shadow:var(--shadow);">'+esc(label)+'</button>';
   };
-  let html=mk("all","Все");
-  INGR_CATS.forEach((c,i)=>html+=mk(String(i),c));
+  let html=mk("all","Все","all");
+  INGR_CATS.forEach((c,i)=>html+=mk(String(i),c,c));
   box.innerHTML=html;
   box.querySelectorAll(".ingr-chip").forEach(b=>b.addEventListener("click",()=>{
     const cat=b.dataset.cat;
