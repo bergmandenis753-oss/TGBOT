@@ -1514,6 +1514,65 @@ def handle_diagnostics(msg):
     )
 
 
+def answer_product_question(msg, user):
+    """Pro-диалог: отвечает на вопрос пользователя про конкретное средство (контекст из его карточки)."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    question = (msg.get("text") or "").strip()
+    if not question:
+        return
+    awaiting = user.get("awaiting") or ""
+    try:
+        cid = int(awaiting.split(":", 1)[1])
+    except (ValueError, IndexError):
+        update_user(user_id, awaiting="none")
+        return
+    if not subscription_active(user):
+        update_user(user_id, awaiting="none")
+        offer_subscription(chat_id, "Вопросы о средстве доступны в Премиуме.")
+        return
+    match = next((c for c in get_user_cosmetics(user_id) if c["id"] == cid), None)
+    if not match:
+        update_user(user_id, awaiting="none")
+        send_message(chat_id, "Средство не найдено. Откройте список: /cosmetics")
+        return
+    name = match.get("product_name") or "средство"
+    ingredients = (match.get("ingredients") or "")[:600]
+    summary = (match.get("summary") or "")[:400]
+    profile = build_profile_text(user)
+    system = (
+        "Ты — эксперт по уходу за волосами. Отвечай честно, по делу, тёплым тоном, без воды. "
+        "Пользователь задаёт вопрос про конкретное средство. Отвечай ТОЛЬКО про это средство, "
+        "опираясь на его состав. Если данных не хватает — честно скажи.\n\n"
+        f"Средство: {name}\n"
+        f"Краткий разбор: {summary}\n"
+        f"Состав: {ingredients}\n"
+    )
+    if profile.strip():
+        system += f"\nПрофиль пользователя (учитывай, если уместно):\n{profile}"
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "max_tokens": 600,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": question},
+                ],
+            },
+            verify=VERIFY, timeout=60,
+        )
+        answer = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"answer_product_question error: {e}")
+        send_message(chat_id, "Не удалось ответить сейчас. Попробуйте ещё раз чуть позже.")
+        return
+    consume_ai_action(user_id, "sub", "product")
+    send_message(chat_id, answer + "\n\n💬 Можно задать ещё вопрос про это средство.")
+
+
 def save_and_forward_idea(msg, user):
     """Сохраняет идею и пересылает администратору."""
     chat_id = msg["chat"]["id"]
@@ -1670,6 +1729,7 @@ def process_scanner_photo(chat_id, user, image_bytes):
             if row:
                 buttons.append(row)
             buttons.append([{"text": "🔎 Поиск аналогов ✦", "callback_data": f"analogs_{cos_id}"}])
+            buttons.append([{"text": "💬 Спросить о средстве ✦", "callback_data": f"ask_{cos_id}"}])
         send_message(chat_id, head,
                      reply_markup={"inline_keyboard": buttons} if buttons else None)
         send_message(chat_id, "◦ Сохранено в вашу базу — /cosmetics или приложение /app")
@@ -1815,6 +1875,28 @@ def handle_callback(callback):
         except Exception as e:
             print(f"analogs error: {e}")
             send_message(chat_id, "Не удалось найти аналоги сейчас. Попробуйте позже.")
+        return
+
+    # Спросить о средстве (Pro): ask_<id>
+    if data.startswith("ask_"):
+        try:
+            cid = int(data.split("_")[1])
+        except (ValueError, IndexError):
+            return
+        u = get_user(user_id)
+        if not subscription_active(u):
+            offer_subscription(chat_id, "Вопросы о средстве доступны в Премиуме.")
+            return
+        match = next((c for c in get_user_cosmetics(user_id) if c["id"] == cid), None)
+        if not match:
+            return
+        update_user(user_id, awaiting="ask_product:" + str(cid))
+        send_message(chat_id,
+            "\U0001F4AC \u00AB" + (match.get("product_name") or "средство") + "\u00BB\n\n"
+            "Отлично! Что бы вы хотели уточнить про это средство? "
+            "Напишите вопрос — отвечу с учётом его состава.\n\n"
+            "Можно задавать вопросы подряд. Чтобы выйти — отправьте /cosmetics или другое фото."
+        )
         return
 
     # Открыть конкретную косметику из списка: cos_<id>
@@ -1992,6 +2074,8 @@ def main():
                     # Ждём текст идеи — приоритет над остальным
                     if user.get("awaiting") == "idea":
                         save_and_forward_idea(msg, user)
+                    elif (user.get("awaiting") or "").startswith("ask_product:"):
+                        answer_product_question(msg, user)
                     # Режим не выбран — показываем развилку
                     elif not user.get("mode"):
                         send_mode_picker(chat_id)
