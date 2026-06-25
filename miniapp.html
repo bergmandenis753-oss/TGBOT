@@ -218,15 +218,25 @@ async function loadTasks(){
   }catch(e){ area.innerHTML=diagHtml+'<div class="empty">Не удалось загрузить задания.</div>'; bindDiagBtn(); }
 }
 
-let BOT_USERNAME="";
 function bindDiagBtn(){
   const b=document.getElementById("diag-btn");
   if(!b) return;
   b.addEventListener("click", async()=>{
-    if(!BOT_USERNAME){ try{ const p=await api("/api/progress"); BOT_USERNAME=p.bot_username||""; }catch(e){} }
-    const link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}?start=diag` : null;
-    if(link && tg?.openTelegramLink){ tg.openTelegramLink(link); tg.close?.(); }
-    else { alert("Откройте бота и отправьте команду /diagnostics, затем фото волос."); }
+    b.disabled=true; b.textContent="Отправляю запрос…";
+    try{
+      const r=await api("/api/request_diagnosis");
+      if(r.ok){
+        b.textContent="✓ Проверьте чат с ботом";
+        tg?.HapticFeedback?.notificationOccurred?.("success");
+        setTimeout(()=>{ tg?.close?.(); }, 900);
+      } else {
+        b.textContent="Откройте чат с ботом и пришлите фото";
+        b.disabled=false;
+      }
+    }catch(e){
+      b.textContent="Не удалось. Попробуйте ещё раз";
+      b.disabled=false;
+    }
   });
 }
 

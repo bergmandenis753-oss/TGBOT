@@ -371,6 +371,35 @@ async def api_compatibility(request: Request):
     return {"result": result, "empty": False}
 
 
+@app.post("/api/request_diagnosis")
+async def api_request_diagnosis(request: Request):
+    """Просит бота прислать пользователю запрос фото волос и ставит ожидание hair_photo."""
+    body = await request.json()
+    user_id = get_user_id(body)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET mode='hair', awaiting='hair_photo' WHERE user_id = %s", (user_id,))
+            conn.commit()
+    except Exception as e:
+        print(f"request_diagnosis db error: {e}")
+    text = (
+        "✦ Диагностика волос\n\n"
+        "Супер! Пришлите фото волос — желательно при дневном свете, волосы распущены.\n"
+        "Можно прислать 2–3 фото (спереди, сверху, сбоку) для точности.\n\n"
+        "Я разберу их и обновлю ваш рейтинг в приложении 💜"
+    )
+    ok = False
+    if BOT_TOKEN:
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                              json={"chat_id": user_id, "text": text}, timeout=15)
+            ok = r.json().get("ok", False)
+        except Exception as e:
+            print(f"request_diagnosis send error: {e}")
+    return {"ok": ok}
+
+
 @app.post("/api/progress")
 async def api_progress(request: Request):
     """Прогресс волос: текущий рейтинг + история диагностик."""

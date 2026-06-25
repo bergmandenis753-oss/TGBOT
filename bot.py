@@ -1631,6 +1631,13 @@ def handle_photo(msg):
         send_message(chat_id, "◦ Не удалось загрузить фото. Попробуйте ещё раз.")
         return
 
+    # Бот явно ждёт фото волос (после квиза ИЛИ запрос диагностики из Mini App) —
+    # это приоритетнее режима; диагностика доступна всем.
+    if user.get("awaiting") == "hair_photo":
+        process_hair_photo(chat_id, user_id, image_bytes, then_report=bool(user.get("quiz_done")))
+        update_user(user_id, awaiting="none")
+        return
+
     # Режим «Сканер косметики» — любое фото трактуем как косметику
     if user.get("mode") == "scanner":
         process_scanner_photo(chat_id, user, image_bytes)
@@ -1644,11 +1651,6 @@ def handle_photo(msg):
             "Это займёт пару минут и поможет дать персональные рекомендации."
         )
         send_quiz_question(chat_id, step_index)
-        return
-
-    # Если бот ждёт фото волос после квиза — это точно волосы
-    if user.get("awaiting") == "hair_photo":
-        process_hair_photo(chat_id, user_id, image_bytes, then_report=True)
         return
 
     # Иначе сами определяем, что на фото: волосы или средство
