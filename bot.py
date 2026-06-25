@@ -147,6 +147,20 @@ def init_db():
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS summary TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS ingredients TEXT;
                 ALTER TABLE user_cosmetics ADD COLUMN IF NOT EXISTS usage TEXT;
+                CREATE TABLE IF NOT EXISTS hair_diagnostics (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    rating REAL,
+                    hair_type TEXT,
+                    density TEXT,
+                    ends_state TEXT,
+                    scalp TEXT,
+                    curl TEXT,
+                    shedding TEXT,
+                    problems TEXT,
+                    full_text TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
             """)
             # Миграция — добавляем колонки если нет
             for col, coltype in [
@@ -174,6 +188,7 @@ def init_db():
                 ("free_product_used", "BOOLEAN DEFAULT FALSE"),
                 ("mode", "TEXT"),
                 ("scanner_used", "INTEGER DEFAULT 0"),
+                ("hair_rating", "REAL"),
             ]:
                 try:
                     cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype};")
@@ -821,30 +836,137 @@ def classify_photo(image_bytes):
         return "product"
 
 
-def analyze_hair(image_bytes):
-    """GPT описывает структуру и особенности волос по фото/селфи."""
-    image_b64 = base64.standard_b64encode(image_bytes).decode()
+def analyze_hair(image_bytes_list):
+    """Структурированная диагностика волос по 1–3 фото (визуальная оценка)."""
+    if not isinstance(image_bytes_list, (list, tuple)):
+        image_bytes_list = [image_bytes_list]
+    content = []
+    for img in image_bytes_list[:3]:
+        b64 = base64.standard_b64encode(img).decode()
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}})
+    n = len(content)
+    photos_note = f"Дано {n} фото волос (разные ракурсы)." if n > 1 else "Дано 1 фото волос."
     prompt = (
-        "Ты — деликатный эксперт-трихолог. На фото волосы или селфи человека. "
-        "Кратко и тактично опиши то, что видно о волосах: примерный тип (прямые/волнистые/кудрявые), "
-        "густоту, состояние (блеск, сухость, ломкость, пушистость), длину, видимые особенности кожи головы. "
-        "Если чего-то не видно — не выдумывай. Пиши спокойно и по делу, без оценок внешности человека, "
-        "только характеристики волос. 4–6 коротких строк, оформление — символами · и —, без ✅ и ❌."
+        "Ты — деликатный эксперт-трихолог. " + photos_note + " "
+        "Это ВИЗУАЛЬНАЯ оценка по фото — не выдумывай то, чего не видно, и не оценивай внешность человека. "
+        "Оцени только волосы. Ответь СТРОГО в формате с разделителями, без лишнего текста, без эмодзи-галочек:\n\n"
+        "===TYPE===\nТип волос (прямые/волнистые/кудрявые/курчавые), одна строка.\n"
+        "===DENSITY===\nГустота (ниже средней/средняя/выше средней), одна строка.\n"
+        "===ENDS===\nСостояние кончиков (здоровые/секущиеся/ломкие/сухие), одна строка.\n"
+        "===SCALP===\nЖирность кожи головы (если видно: сухая/нормальная/склонна к жирности; иначе «не видно»), одна строка.\n"
+        "===CURL===\nНаличие и тип завитка (если видно), одна строка.\n"
+        "===SHEDDING===\nПризнаки выпадения (осторожно: «возможны признаки» / «не заметно по фото»), одна строка.\n"
+        "===PROBLEMS===\nОсновные проблемы — 2–4 пункта через запятую (сухость, пушение, тусклость и т.п.).\n"
+        "===RATING===\nОбщий рейтинг состояния волос числом от 0 до 10 с одной десятой (например 6.8). Только число.\n"
+        "===SUMMARY===\n2–3 тёплые строки: что в целом с волосами и на что обратить внимание.\n"
+        "===END==="
     )
+    content.append({"type": "text", "text": prompt})
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json={
             "model": "gpt-4o-mini",
-            "max_tokens": 500,
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}", "detail": "low"}},
-                {"type": "text", "text": prompt}
-            ]}]
+            "max_tokens": 700,
+            "messages": [{"role": "user", "content": content}]
         },
         verify=VERIFY
     )
-    return resp.json()["choices"][0]["message"]["content"]
+    text = resp.json()["choices"][0]["message"]["content"]
+    return parse_hair_diagnosis(text)
+
+
+def parse_hair_diagnosis(text):
+    """Разбирает структурированный ответ диагностики волос."""
+    def sec(a, b):
+        try:
+            s = text.index(a) + len(a)
+            e = text.index(b, s)
+            return text[s:e].strip()
+        except ValueError:
+            return ""
+    d = {
+        "hair_type": sec("===TYPE===", "===DENSITY==="),
+        "density": sec("===DENSITY===", "===ENDS==="),
+        "ends_state": sec("===ENDS===", "===SCALP==="),
+        "scalp": sec("===SCALP===", "===CURL==="),
+        "curl": sec("===CURL===", "===SHEDDING==="),
+        "shedding": sec("===SHEDDING===", "===PROBLEMS==="),
+        "problems": sec("===PROBLEMS===", "===RATING==="),
+        "summary": sec("===SUMMARY===", "===END==="),
+    }
+    rating_raw = sec("===RATING===", "===SUMMARY===")
+    import re
+    m = re.search(r"(\d+(?:[.,]\d+)?)", rating_raw)
+    d["rating"] = float(m.group(1).replace(",", ".")) if m else None
+    if d["rating"] is not None:
+        d["rating"] = max(0.0, min(10.0, d["rating"]))
+    d["full_text"] = format_hair_diagnosis(d)
+    return d
+
+
+def format_hair_diagnosis(d):
+    """Красивый текст диагностики для отправки и хранения."""
+    lines = ["✦ Диагностика волос", "(визуальная оценка по фото)", ""]
+    rows = [
+        ("Тип волос", d.get("hair_type")),
+        ("Густота", d.get("density")),
+        ("Кончики", d.get("ends_state")),
+        ("Кожа головы", d.get("scalp")),
+        ("Завиток", d.get("curl")),
+        ("Выпадение", d.get("shedding")),
+    ]
+    for label, val in rows:
+        if val and val.lower() not in ("не видно", "—", ""):
+            lines.append(f"· {label}: {val}")
+    if d.get("rating") is not None:
+        lines.append("")
+        lines.append(f"★ Общий рейтинг: {d['rating']:.1f}/10")
+    if d.get("problems"):
+        lines.append("")
+        lines.append("Основные проблемы:")
+        for p in [x.strip() for x in d["problems"].replace("\n", ",").split(",") if x.strip()]:
+            lines.append(f"— {p}")
+    if d.get("summary"):
+        lines.append("")
+        lines.append(d["summary"])
+    return "\n".join(lines)
+
+
+def save_hair_diagnosis(user_id, d):
+    """Сохраняет диагностику в историю и обновляет текущее состояние пользователя."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO hair_diagnostics "
+                    "(user_id, rating, hair_type, density, ends_state, scalp, curl, shedding, problems, full_text) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (user_id, d.get("rating"), d.get("hair_type"), d.get("density"), d.get("ends_state"),
+                     d.get("scalp"), d.get("curl"), d.get("shedding"), d.get("problems"), d.get("full_text"))
+                )
+            conn.commit()
+    except Exception as e:
+        print(f"save_hair_diagnosis error: {e}")
+    update_user(user_id, hair_analysis=d.get("full_text"), hair_rating=d.get("rating"))
+
+
+def previous_diagnosis(user_id):
+    """Предыдущая диагностика (для сравнения прогресса). None если первая."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT rating, problems, created_at FROM hair_diagnostics "
+                    "WHERE user_id = %s ORDER BY created_at DESC, id DESC LIMIT 2",
+                    (user_id,)
+                )
+                rows = cur.fetchall()
+        return rows[1] if len(rows) >= 2 else None
+    except Exception as e:
+        print(f"previous_diagnosis error: {e}")
+        return None
 
 
 def generate_final_report(user):
@@ -1300,6 +1422,27 @@ def handle_idea(msg):
     )
 
 
+def handle_diagnostics(msg):
+    """Команда /diagnostics — новая диагностика волос (фото → структурный разбор)."""
+    chat_id = msg["chat"]["id"]
+    user_id = msg.get("from", {}).get("id")
+    user = get_user(user_id,
+                    username=msg.get("from", {}).get("username", ""),
+                    first_name=msg.get("from", {}).get("first_name", ""))
+    update_user(user_id, mode="hair", awaiting="hair_photo")
+    prev = previous_diagnosis(user_id)
+    intro = "✦ Диагностика волос\n\n"
+    if prev and prev.get("rating") is not None:
+        intro += f"Прошлый рейтинг: {prev['rating']:.1f}/10. Сравним с новым.\n\n"
+    send_message(chat_id,
+        intro +
+        "Пришлите фото волос — желательно при дневном свете, волосы распущены.\n"
+        "Для точности можно прислать 2–3 фото: спереди, сверху и сбоку "
+        "(я учту последнее присланное фото как основное).\n\n"
+        "Это визуальная оценка по фото — не диагноз."
+    )
+
+
 def save_and_forward_idea(msg, user):
     """Сохраняет идею и пересылает администратору."""
     chat_id = msg["chat"]["id"]
@@ -1325,15 +1468,22 @@ def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
         offer_subscription(chat_id, "Бесплатный анализ волос вы уже использовали.")
         return
 
-    send_message(chat_id, "✦ Изучаю ваши волосы...")
+    send_message(chat_id, "✦ Провожу диагностику волос...")
     try:
-        hair = analyze_hair(image_bytes)
-        update_user(user_id, hair_analysis=hair)
+        prev = previous_diagnosis(user_id)
+        d = analyze_hair(image_bytes)
+        save_hair_diagnosis(user_id, d)
         consume_ai_action(user_id, way, "hair")
-        send_message(chat_id, "✦ Что видно о ваших волосах:\n\n" + hair)
+        send_message(chat_id, d.get("full_text") or "Диагностика готова.")
+        # сравнение с прошлой диагностикой (прогресс)
+        if prev and prev.get("rating") is not None and d.get("rating") is not None:
+            diff = d["rating"] - prev["rating"]
+            arrow = "↑" if diff > 0 else ("↓" if diff < 0 else "→")
+            send_message(chat_id,
+                f"📈 Динамика рейтинга: {prev['rating']:.1f} → {d['rating']:.1f} {arrow}")
     except Exception as e:
         print(f"Error hair analysis: {e}")
-        send_message(chat_id, "◦ Не удалось разобрать фото волос.")
+        send_message(chat_id, "◦ Не удалось разобрать фото волос. Попробуйте другое фото.")
     if then_report:
         deliver_final_report(chat_id, user_id)
 
@@ -1748,6 +1898,8 @@ def main():
                     handle_app(msg)
                 elif command == "/idea":
                     handle_idea(msg)
+                elif command in ("/diagnostics", "/diagnostic", "/diag"):
+                    handle_diagnostics(msg)
                 elif msg.get("photo"):
                     handle_photo(msg)
                 elif msg.get("text"):
