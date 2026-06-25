@@ -508,6 +508,7 @@ async function sendChat(){
 function lockHtml(){ return '<div class="lock"><div class="big">'+LOCK+'</div>Эта функция доступна по подписке Премиум.<br>Оформите её в боте, чтобы открыть план и чат с экспертом.</div>'; }
 let INGR_ITEMS=[];
 let INGR_CAT="all";
+let INGR_CATS=[];
 async function loadIngredients(){
   const area=document.getElementById("ingr-area");
   try{
@@ -516,29 +517,35 @@ async function loadIngredients(){
       INGR_ITEMS=d.items||[];
     }
     if(!INGR_ITEMS.length){ area.innerHTML='<div class="empty">База ингредиентов пока пуста.</div>'; return; }
-    const cats=[]; INGR_ITEMS.forEach(it=>{ if(!cats.includes(it.category)) cats.push(it.category); });
-    let chips='<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;">';
-    chips+=ingrChip("all","Все");
-    cats.forEach(c=>chips+=ingrChip(c,c));
-    chips+='</div>';
-    area.innerHTML=chips
+    INGR_CATS=[]; INGR_ITEMS.forEach(it=>{ if(!INGR_CATS.includes(it.category)) INGR_CATS.push(it.category); });
+    area.innerHTML=
+       '<button class="btn" id="ingr-quiz-btn" style="margin-bottom:14px;">🎓 Обучение — пройти квиз</button>'
+      +'<div id="ingr-chips" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;"></div>'
       +'<input id="ingr-search" placeholder="Поиск ингредиента…" autocomplete="off" style="width:100%;border:none;border-radius:14px;padding:12px 16px;margin-bottom:12px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);">'
       +'<div id="ingr-list"></div>';
-    document.querySelectorAll(".ingr-chip").forEach(b=>b.addEventListener("click",()=>{
-      INGR_CAT=b.dataset.cat; loadIngredientsRender();
-      document.querySelectorAll(".ingr-chip").forEach(x=>x.classList.remove("on"));
-      b.classList.add("on");
-    }));
+    document.getElementById("ingr-quiz-btn").addEventListener("click",openQuizMenu);
     const s=document.getElementById("ingr-search");
-    if(s) s.addEventListener("input",loadIngredientsRender);
-    loadIngredientsRender();
+    if(s) s.addEventListener("input",renderIngrList);
+    renderIngrChips();
+    renderIngrList();
   }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
 }
-function ingrChip(cat,label){
-  const on=INGR_CAT===cat;
-  return '<button class="ingr-chip'+(on?' on':'')+'" data-cat="'+esc(cat)+'" style="border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;background:'+(on?'linear-gradient(135deg,var(--accent2),var(--accent))':'var(--card)')+';color:'+(on?'#fff':'var(--accent)')+';box-shadow:var(--shadow);">'+esc(label)+'</button>';
+function renderIngrChips(){
+  const box=document.getElementById("ingr-chips"); if(!box) return;
+  const mk=(key,label)=>{
+    const on=INGR_CAT===key;
+    return '<button class="ingr-chip" data-cat="'+key+'" style="border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;background:'+(on?'linear-gradient(135deg,var(--accent2),var(--accent))':'var(--card)')+';color:'+(on?'#fff':'var(--accent)')+';box-shadow:var(--shadow);">'+esc(label)+'</button>';
+  };
+  let html=mk("all","Все");
+  INGR_CATS.forEach((c,i)=>html+=mk(String(i),c));
+  box.innerHTML=html;
+  box.querySelectorAll(".ingr-chip").forEach(b=>b.addEventListener("click",()=>{
+    const cat=b.dataset.cat;
+    INGR_CAT = cat==="all" ? "all" : INGR_CATS[Number(cat)];
+    renderIngrChips(); renderIngrList();
+  }));
 }
-function loadIngredientsRender(){
+function renderIngrList(){
   const list=document.getElementById("ingr-list"); if(!list) return;
   const q=(document.getElementById("ingr-search")?.value||"").trim().toLowerCase();
   let items=INGR_ITEMS;
@@ -566,6 +573,90 @@ function loadIngredientsRender(){
     });
   });
 }
+
+// ── Обучение: квизы по ингредиентам ──────────────
+let QUIZ=null; // {cat, questions:[{q,options,correct}], idx, correctCount}
+function openQuizMenu(){
+  const area=document.getElementById("ingr-area");
+  let html='<button class="btn secondary" id="quiz-back" style="margin-bottom:14px;">‹ К ингредиентам</button>'
+    +'<h3 style="margin:0 0 12px;">🎓 Обучение</h3>'
+    +'<div class="meta" style="margin-bottom:14px;color:var(--muted);">Проверьте знания об ингредиентах. Выберите тему:</div>';
+  INGR_CATS.forEach((c,i)=>{
+    const n=INGR_ITEMS.filter(it=>it.category===c).length;
+    const pct=QUIZ_SCORES[c]!=null?QUIZ_SCORES[c]:0;
+    html+='<div class="card quiz-cat" data-ci="'+i+'" style="cursor:pointer;margin-bottom:10px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;"><h3 style="margin:0;">'+esc(c)+'</h3><span style="color:var(--accent);font-weight:500;">'+pct+'%</span></div>'
+      +'<div class="bar" style="margin-top:8px;"><i style="display:block;height:100%;width:'+pct+'%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:8px;"></i></div>'
+      +'<div class="meta" style="margin-top:6px;color:var(--muted);">'+n+' вопрос(ов)</div></div>';
+  });
+  area.innerHTML=html;
+  document.getElementById("quiz-back").addEventListener("click",loadIngredients);
+  area.querySelectorAll(".quiz-cat").forEach(c=>c.addEventListener("click",()=>startQuiz(INGR_CATS[Number(c.dataset.ci)])));
+}
+function buildQuestions(cat){
+  const items=INGR_ITEMS.filter(it=>it.category===cat);
+  const qs=[];
+  items.forEach(it=>{
+    // правильный ответ — его влияние; неверные — влияния других ингредиентов
+    const others=INGR_ITEMS.filter(x=>x.name!==it.name && x.effect).map(x=>x.effect);
+    shuffle(others);
+    const opts=[it.effect, others[0]||"Не влияет на волосы", others[1]||"Используется только как краситель"];
+    const correct=it.effect;
+    shuffle(opts);
+    qs.push({q:"С чем нам помогает «"+it.name+"»?", options:opts, correct:opts.indexOf(correct)});
+  });
+  shuffle(qs);
+  return qs;
+}
+function startQuiz(cat){
+  QUIZ={cat, questions:buildQuestions(cat), idx:0, correctCount:0};
+  renderQuizQuestion();
+}
+function renderQuizQuestion(){
+  const area=document.getElementById("ingr-area");
+  const q=QUIZ.questions[QUIZ.idx];
+  if(!q){ return renderQuizResult(); }
+  let html='<div class="meta" style="color:var(--muted);margin-bottom:6px;">'+esc(QUIZ.cat)+' · вопрос '+(QUIZ.idx+1)+' из '+QUIZ.questions.length+'</div>'
+    +'<div class="bar" style="margin-bottom:16px;"><i style="display:block;height:100%;width:'+Math.round(QUIZ.idx/QUIZ.questions.length*100)+'%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:8px;"></i></div>'
+    +'<div class="card" style="margin-bottom:14px;"><h3 style="margin:0;">'+esc(q.q)+'</h3></div>';
+  q.options.forEach((o,i)=>{
+    html+='<button class="btn secondary quiz-opt" data-i="'+i+'" style="width:100%;margin-bottom:10px;text-align:left;white-space:normal;">'+esc(o)+'</button>';
+  });
+  area.innerHTML=html;
+  area.querySelectorAll(".quiz-opt").forEach(b=>b.addEventListener("click",()=>answerQuiz(Number(b.dataset.i),b)));
+}
+function answerQuiz(i,btn){
+  const q=QUIZ.questions[QUIZ.idx];
+  const correct=i===q.correct;
+  if(correct) QUIZ.correctCount++;
+  document.querySelectorAll(".quiz-opt").forEach((b,bi)=>{
+    b.disabled=true;
+    if(bi===q.correct){ b.style.background="#dff5e6"; b.style.color="#1f9254"; }
+    else if(bi===i){ b.style.background="#f7e2e8"; b.style.color="#b04a63"; }
+  });
+  tg?.HapticFeedback?.notificationOccurred?.(correct?"success":"error");
+  setTimeout(()=>{ QUIZ.idx++; renderQuizQuestion(); }, 750);
+}
+function renderQuizResult(){
+  const area=document.getElementById("ingr-area");
+  const total=QUIZ.questions.length;
+  const pct=total?Math.round(QUIZ.correctCount/total*100):0;
+  QUIZ_SCORES[QUIZ.cat]=pct;
+  saveQuizScores();
+  area.innerHTML='<div class="card" style="text-align:center;margin-bottom:14px;">'
+    +'<h3 style="margin:0 0 8px;">Результат</h3>'
+    +'<div style="font-size:34px;font-weight:600;color:var(--accent);">'+pct+'%</div>'
+    +'<div class="meta" style="margin-top:6px;">Правильно '+QUIZ.correctCount+' из '+total+'</div></div>'
+    +'<button class="btn" id="quiz-retry" style="margin-bottom:10px;">Пройти заново</button>'
+    +'<button class="btn secondary" id="quiz-menu">‹ К темам</button>';
+  document.getElementById("quiz-retry").addEventListener("click",()=>startQuiz(QUIZ.cat));
+  document.getElementById("quiz-menu").addEventListener("click",openQuizMenu);
+}
+// прогресс знаний хранится локально
+let QUIZ_SCORES={};
+try{ QUIZ_SCORES=JSON.parse(localStorage.getItem("quizScores")||"{}"); }catch(e){ QUIZ_SCORES={}; }
+function saveQuizScores(){ try{ localStorage.setItem("quizScores",JSON.stringify(QUIZ_SCORES)); }catch(e){} }
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 (async function init(){
