@@ -1,4 +1,5 @@
 import os
+import json
 import base64
 import time
 import hashlib
@@ -479,6 +480,21 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     if parse_mode:
         payload["parse_mode"] = parse_mode
     tg("sendMessage", payload)
+
+
+def send_photo_file(chat_id, path, caption=None, reply_markup=None):
+    try:
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+        with open(path, "rb") as f:
+            resp = requests.post(API_URL + "/sendPhoto", data=data, files={"photo": f}, verify=VERIFY, timeout=30)
+        return resp.json().get("ok", False)
+    except Exception as e:
+        print("send_photo_file error:", e)
+        return False
 
 
 def send_subscription_invoice(chat_id):
@@ -1107,7 +1123,13 @@ def send_intro_post(chat_id):
         markup = {"inline_keyboard": [[
             {"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}
         ]]}
-    send_message(chat_id, text, reply_markup=markup)
+    # Пытаемся отправить превью приложения как фото с подписью
+    img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_preview.png")
+    sent = False
+    if os.path.exists(img_path):
+        sent = send_photo_file(chat_id, img_path, caption=text, reply_markup=markup)
+    if not sent:
+        send_message(chat_id, text, reply_markup=markup)
 
 
 def send_mode_picker(chat_id):
