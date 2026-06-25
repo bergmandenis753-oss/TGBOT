@@ -371,6 +371,29 @@ async def api_compatibility(request: Request):
     return {"result": result, "empty": False}
 
 
+@app.post("/api/ingredients")
+async def api_ingredients(request: Request):
+    """Справочник ингредиентов: список с категориями (для раздела Mini App)."""
+    body = await request.json()
+    get_user_id(body)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, emoji, what, hair_effect, found_in, category "
+                "FROM ingredients ORDER BY sort_order, id"
+            )
+            rows = cur.fetchall()
+    items = [{
+        "name": r["name"],
+        "emoji": r.get("emoji") or "",
+        "what": r.get("what") or "",
+        "effect": r.get("hair_effect") or "",
+        "found_in": r.get("found_in") or "",
+        "category": r.get("category") or "Другое",
+    } for r in rows]
+    return {"items": items}
+
+
 @app.post("/api/request_diagnosis")
 async def api_request_diagnosis(request: Request):
     """Просит бота прислать пользователю запрос фото волос и ставит ожидание hair_photo."""

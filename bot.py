@@ -162,6 +162,17 @@ def init_db():
                     full_text TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS ingredients (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT UNIQUE,
+                    emoji TEXT,
+                    what TEXT,
+                    hair_effect TEXT,
+                    found_in TEXT,
+                    category TEXT,
+                    sort_order INTEGER DEFAULT 0
+                );
+                ALTER TABLE ingredients ADD COLUMN IF NOT EXISTS category TEXT;
             """)
             # Миграция — добавляем колонки если нет
             for col, coltype in [
@@ -197,6 +208,44 @@ def init_db():
                     pass
         conn.commit()
     print("DB initialized")
+
+
+def seed_ingredients():
+    try:
+        from ingredients_seed import INGREDIENTS
+    except Exception as e:
+        print("seed import error:", e); return
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                for i, row in enumerate(INGREDIENTS):
+                    category, name, emoji, what, effect, found = row
+                    cur.execute(
+                        "INSERT INTO ingredients (name, emoji, what, hair_effect, found_in, category, sort_order) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                        "ON CONFLICT (name) DO UPDATE SET emoji=EXCLUDED.emoji, what=EXCLUDED.what, "
+                        "hair_effect=EXCLUDED.hair_effect, found_in=EXCLUDED.found_in, "
+                        "category=EXCLUDED.category, sort_order=EXCLUDED.sort_order",
+                        (name, emoji, what, effect, found, category, i))
+            conn.commit()
+        print("Ingredients seeded")
+    except Exception as e:
+        print("seed error:", e)
+
+
+def ingredient_of_the_day():
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, emoji, what, hair_effect, found_in, category FROM ingredients ORDER BY sort_order, id")
+                rows = cur.fetchall()
+        if not rows:
+            return None
+        import datetime as _dt
+        return rows[_dt.date.today().toordinal() % len(rows)]
+    except Exception as e:
+        print("ingredient_of_the_day error:", e)
+        return None
 
 
 def get_user(user_id, username=None, first_name=None):
@@ -1989,6 +2038,7 @@ def main():
     for attempt in range(10):
         try:
             init_db()
+            seed_ingredients()
             break
         except Exception as e:
             print(f"DB attempt {attempt+1} failed: {e}")
@@ -2102,6 +2152,68 @@ def main():
             time.sleep(3)
 
 
+DAILY_HOUR_UTC = 7
+
+def format_daily_ingredient(d):
+    emoji = (d.get("emoji") or "").strip()
+    name = d.get("name") or "ингредиент"
+    return (
+        "🌿 Ингредиент дня\n\n"
+        "Кстати, вы знали про " + name + "?\n\n"
+        + "▫️ " + (d.get("what") or "") + "\n\n"
+        + "💆‍♀️ Как влияет на волосы:\n" + (d.get("hair_effect") or "") + "\n\n"
+        + "🧴 Где встречается: " + (d.get("found_in") or "") + "\n\n"
+        + "✦ Кстати, всё это — в нашем приложении, раздел «Ингредиенты»!"
+    )
+
+
+def broadcast_daily_ingredient():
+    d = ingredient_of_the_day()
+    if not d:
+        print("daily: no ingredient"); return
+    text = format_daily_ingredient(d)
+    markup = None
+    if WEBAPP_URL:
+        markup = {"inline_keyboard": [[{"text": "Открыть приложение ✦", "web_app": {"url": WEBAPP_URL}}]]}
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM users")
+                ids = [r["user_id"] for r in cur.fetchall()]
+    except Exception as e:
+        print("daily ids error:", e); return
+    sent = 0
+    for uid in ids:
+        try:
+            send_message(uid, text, reply_markup=markup); sent += 1
+        except Exception:
+            pass
+        time.sleep(0.05)
+    print("daily broadcast sent to", sent, "users")
+
+
+def daily_scheduler():
+    last_sent_date = None
+    while True:
+        try:
+            now = datetime.utcnow()
+            if now.hour == DAILY_HOUR_UTC and last_sent_date != now.date():
+                broadcast_daily_ingredient()
+                last_sent_date = now.date()
+        except Exception as e:
+            print("daily_scheduler error:", e)
+        time.sleep(300)
+
+
+def start_daily_scheduler_bg():
+    try:
+        import threading
+        threading.Thread(target=daily_scheduler, daemon=True).start()
+        print("Daily ingredient scheduler launched")
+    except Exception as e:
+        print("daily scheduler launch failed:", e)
+
+
 def start_admin_bot_bg():
     """Запускает админ-бота в фоне, если задан ADMIN_BOT_TOKEN."""
     if not os.getenv("ADMIN_BOT_TOKEN"):
@@ -2124,10 +2236,12 @@ if __name__ == "__main__":
         threading.Thread(target=main, daemon=True).start()
         print("Bot started in background thread")
         start_admin_bot_bg()
+        start_daily_scheduler_bg()
         import uvicorn
         from webapp import app as webapp_app
         uvicorn.run(webapp_app, host="0.0.0.0", port=int(port), log_level="warning")
     else:
         # Без PORT — бот + админ-бот
         start_admin_bot_bg()
+        start_daily_scheduler_bg()
         main()

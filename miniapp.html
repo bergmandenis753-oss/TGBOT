@@ -101,6 +101,8 @@
         <span class="tico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#f0e7f9"/><rect x="19" y="11" width="10" height="5" rx="2" fill="#b98fe0"/><rect x="17" y="16" width="14" height="22" rx="6" fill="#fff"/><rect x="17" y="24" width="14" height="14" rx="6" fill="#dcc8ef"/><circle cx="34" cy="20" r="2" fill="#c8a8e9"/><circle cx="13" cy="30" r="1.6" fill="#c8a8e9"/></svg></span>Косметика</button>
       <button class="tile" data-tab="chat">
         <span class="tico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#e9e4fb"/><path d="M14 22c0-5 5-9 11-9s11 4 11 9-5 9-11 9c-1.4 0-2.7-.2-4-.5L16 33l1.3-4.2C15.2 27.2 14 24.7 14 22z" fill="#8b7fe0"/><circle cx="20" cy="22" r="1.8" fill="#efe7ff"/><circle cx="25" cy="22" r="1.8" fill="#efe7ff"/><circle cx="30" cy="22" r="1.8" fill="#efe7ff"/></svg></span>Чат</button>
+      <button class="tile" data-tab="ingredients">
+        <span class="tico"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="#efe2f7"/><path d="M21 13h6v8l6 11a3 3 0 0 1-2.6 4.5H17.6A3 3 0 0 1 15 32l6-11v-8z" fill="#fff" stroke="#a273d6" stroke-width="2"/><path d="M18 28h12l2.5 4.5A2 2 0 0 1 30.7 36H17.3A2 2 0 0 1 15.5 32.5L18 28z" fill="#dcc8ef"/><circle cx="24" cy="32" r="1.6" fill="#b98fe0"/><circle cx="21" cy="30" r="1.1" fill="#b98fe0"/><circle cx="34" cy="20" r="2" fill="#c8a8e9"/><circle cx="14" cy="24" r="1.6" fill="#c8a8e9"/></svg></span>Ингредиенты</button>
     </div>
   </section>
 
@@ -128,6 +130,10 @@
       <input id="chat-text" placeholder="Спросите эксперта…" autocomplete="off">
       <button id="chat-send">→</button>
     </div>
+  </section>
+  <section class="tab" id="tab-ingredients">
+    <button class="back" data-back>‹ Назад</button>
+    <div id="ingr-area"><div class="spinner">Загрузка…</div></div>
   </section>
 </main>
 
@@ -168,6 +174,7 @@ function switchTab(name){
   if(name==="plan") loadPlan();
   if(name==="cosmetics") loadCosmetics();
   if(name==="chat") loadChat();
+  if(name==="ingredients") loadIngredients();
 }
 
 function diagBlockHtml(p){
@@ -499,6 +506,66 @@ async function sendChat(){
 }
 
 function lockHtml(){ return '<div class="lock"><div class="big">'+LOCK+'</div>Эта функция доступна по подписке Премиум.<br>Оформите её в боте, чтобы открыть план и чат с экспертом.</div>'; }
+let INGR_ITEMS=[];
+let INGR_CAT="all";
+async function loadIngredients(){
+  const area=document.getElementById("ingr-area");
+  try{
+    if(!INGR_ITEMS.length){
+      const d=await api("/api/ingredients");
+      INGR_ITEMS=d.items||[];
+    }
+    if(!INGR_ITEMS.length){ area.innerHTML='<div class="empty">База ингредиентов пока пуста.</div>'; return; }
+    const cats=[]; INGR_ITEMS.forEach(it=>{ if(!cats.includes(it.category)) cats.push(it.category); });
+    let chips='<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;">';
+    chips+=ingrChip("all","Все");
+    cats.forEach(c=>chips+=ingrChip(c,c));
+    chips+='</div>';
+    area.innerHTML=chips
+      +'<input id="ingr-search" placeholder="Поиск ингредиента…" autocomplete="off" style="width:100%;border:none;border-radius:14px;padding:12px 16px;margin-bottom:12px;background:var(--card);color:var(--text);font-size:14px;outline:none;box-shadow:var(--shadow);">'
+      +'<div id="ingr-list"></div>';
+    document.querySelectorAll(".ingr-chip").forEach(b=>b.addEventListener("click",()=>{
+      INGR_CAT=b.dataset.cat; loadIngredientsRender();
+      document.querySelectorAll(".ingr-chip").forEach(x=>x.classList.remove("on"));
+      b.classList.add("on");
+    }));
+    const s=document.getElementById("ingr-search");
+    if(s) s.addEventListener("input",loadIngredientsRender);
+    loadIngredientsRender();
+  }catch(e){ area.innerHTML='<div class="empty">Не удалось загрузить.</div>'; }
+}
+function ingrChip(cat,label){
+  const on=INGR_CAT===cat;
+  return '<button class="ingr-chip'+(on?' on':'')+'" data-cat="'+esc(cat)+'" style="border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;background:'+(on?'linear-gradient(135deg,var(--accent2),var(--accent))':'var(--card)')+';color:'+(on?'#fff':'var(--accent)')+';box-shadow:var(--shadow);">'+esc(label)+'</button>';
+}
+function loadIngredientsRender(){
+  const list=document.getElementById("ingr-list"); if(!list) return;
+  const q=(document.getElementById("ingr-search")?.value||"").trim().toLowerCase();
+  let items=INGR_ITEMS;
+  if(INGR_CAT!=="all") items=items.filter(it=>it.category===INGR_CAT);
+  if(q) items=items.filter(it=>(it.name||"").toLowerCase().includes(q));
+  if(!items.length){ list.innerHTML='<div class="empty">Ничего не найдено.</div>'; return; }
+  list.innerHTML=items.map((it,idx)=>`
+    <div class="card ingr-card" data-i="${idx}" style="cursor:pointer;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <h3 style="margin:0;flex:1;">${it.emoji?it.emoji+" ":""}${esc(it.name)}</h3>
+        <span class="chev" style="color:var(--muted);font-size:18px;">›</span>
+      </div>
+      <div class="ingr-detail" style="display:none;margin-top:10px;">
+        <div class="meta"><b>Что это:</b> ${esc(it.what)}</div>
+        <div class="meta" style="margin-top:8px;"><b>Влияние на волосы:</b> ${esc(it.effect)}</div>
+        ${it.found_in?`<div class="meta" style="margin-top:8px;"><b>Где встречается:</b> ${esc(it.found_in)}</div>`:""}
+      </div>
+    </div>`).join("");
+  list.querySelectorAll(".ingr-card").forEach(card=>{
+    card.addEventListener("click",()=>{
+      const d=card.querySelector(".ingr-detail");
+      const open=d.style.display!=="none";
+      d.style.display=open?"none":"block";
+      card.querySelector(".chev").textContent=open?"›":"⌄";
+    });
+  });
+}
 function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 (async function init(){
