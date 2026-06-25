@@ -952,6 +952,23 @@ def save_hair_diagnosis(user_id, d):
     update_user(user_id, hair_analysis=d.get("full_text"), hair_rating=d.get("rating"))
 
 
+def todays_diagnosis(user_id):
+    """Диагностика, сделанная сегодня (кэш на день). None если сегодня ещё не было."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT rating, full_text FROM hair_diagnostics "
+                    "WHERE user_id = %s AND created_at::date = (NOW() AT TIME ZONE 'UTC')::date "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (user_id,)
+                )
+                return cur.fetchone()
+    except Exception as e:
+        print(f"todays_diagnosis error: {e}")
+        return None
+
+
 def previous_diagnosis(user_id):
     """Предыдущая диагностика (для сравнения прогресса). None если первая."""
     try:
@@ -1474,6 +1491,15 @@ def process_hair_photo(chat_id, user_id, image_bytes, then_report=True):
     allowed, way = can_use_ai(user, "hair")
     if not allowed:
         offer_subscription(chat_id, "Бесплатный анализ волос вы уже использовали.")
+        return
+
+    # Кэш на день: если сегодня уже была диагностика — показываем её, без нового запроса к GPT
+    today = todays_diagnosis(user_id)
+    if today:
+        send_message(chat_id,
+            (today.get("full_text") or "Диагностика готова.") +
+            "\n\n(Сегодня вы уже делали диагностику — показываю её. Новая будет доступна завтра.)"
+        )
         return
 
     send_message(chat_id, "✦ Провожу диагностику волос...")

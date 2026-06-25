@@ -408,7 +408,7 @@ async def api_progress(request: Request):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT rating, problems, created_at FROM hair_diagnostics "
+                "SELECT rating, problems, full_text, created_at FROM hair_diagnostics "
                 "WHERE user_id = %s ORDER BY created_at DESC, id DESC LIMIT 20",
                 (user_id,)
             )
@@ -419,7 +419,8 @@ async def api_progress(request: Request):
         "date": r["created_at"].strftime("%d.%m.%Y") if r.get("created_at") else "",
     } for r in rows]
     current = history[0]["rating"] if history else None
-    return {"current": current, "history": history, "bot_username": get_bot_username()}
+    latest_full = rows[0].get("full_text") if rows else ""
+    return {"current": current, "history": history, "full_text": latest_full or "", "bot_username": get_bot_username()}
 
 
 _BOT_USERNAME_CACHE = {"v": None}

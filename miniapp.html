@@ -182,11 +182,14 @@ function diagBlockHtml(p){
   } else {
     hist='<div class="meta" style="color:var(--muted);margin-top:10px;">Диагностики ещё не было. Сделайте первую — и здесь появится ваш рейтинг и динамика.</div>';
   }
+  const moreBtn=(p&&p.full_text)?'<button class="btn secondary" id="diag-more" style="margin-top:10px;">Подробнее ▾</button>'
+    +'<div id="diag-full" style="display:none;margin-top:10px;"><div class="meta" style="white-space:pre-wrap;">'+esc(p.full_text)+'</div></div>':'';
   return '<div class="card" style="margin-bottom:14px;">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;">'
     +'<h3 style="margin:0;">Диагностика волос</h3>'
     +'<b style="color:var(--accent);font-size:20px;">'+cur+(cur!=="—"?'/10':'')+'</b></div>'
     +hist
+    +moreBtn
     +'<button class="btn" id="diag-btn" style="margin-top:14px;">📸 Сделать диагностику</button>'
     +'</div>';
 }
@@ -219,6 +222,13 @@ async function loadTasks(){
 }
 
 function bindDiagBtn(){
+  const more=document.getElementById("diag-more");
+  if(more) more.addEventListener("click",()=>{
+    const f=document.getElementById("diag-full");
+    const open=f.style.display!=="none";
+    f.style.display=open?"none":"block";
+    more.textContent=open?"Подробнее ▾":"Скрыть ▴";
+  });
   const b=document.getElementById("diag-btn");
   if(!b) return;
   b.addEventListener("click", async()=>{
